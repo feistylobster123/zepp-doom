@@ -33,7 +33,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="info">BIP-DOOM | Bip 6 390x450 | Tilt: Move | Swipe L/R: Weapon | Dbl-Tap: Shoot</div>
+<div id="info">BIP-DOOM | Bip 6 390x450 | GYRO: Twist=Turn Tilt=Fwd | Swipe L/R: Weapon | Dbl-Tap: Shoot | R: Recalibrate</div>
 <script>
 'use strict';
 
@@ -47,36 +47,65 @@
 var W = 390, H = 450;
 
 // ================================================================
-// ZEPP OS COMPATIBILITY LAYER (for real device)
-// This is replaced by actual Zepp OS imports on device:
-//   import { Accelerometer } from '@zos/sensor'
+// ZEPP OS COMPATIBILITY LAYER
+// On real device, replace with:
+//   import { Accelerometer, Gyroscope, FREQ_MODE_NORMAL } from '@zos/sensor'
 //   import { Vibrator } from '@zos/sensor'
 //   import { onGesture } from '@zos/interaction'
+//
+// Zepp OS Gyroscope: { x, y, z } in DPS (degrees per second)
+// Zepp OS Accelerometer: { x, y, z } in cm/s^2
 // ================================================================
 var ZeppOS = {
-  accel:       null,
-  gyro:        null,
-  vibrator:    null,
-  gestureCb:   null,
-  simAccel:    { x: 0, y: 0, z: 9.8 },
+  gestureCb:    null,
+  // Raw sensor data
+  simAccel:     { x: 0, y: 0, z: 9.8 },
+  simGyro:      { x: 0, y: 0, z: 0 },
+  // Calibrated offsets (captured at startup/neutral)
+  gyroOffset:   { x: 0, y: 0, z: 0 },
+  accelOffset:  { x: 0, y: 0, z: 0 },
   accelEnabled: false,
   gyroEnabled:  false,
+  calibrated:   false,
+  calibFrames:  [],
+  CALIB_FRAMES: 30,
 
   init: function() {
-    this._setupAccelerometer();
+    this._setupSensors();
     this._setupGestureHandlers();
   },
 
-  _setupAccelerometer: function() {
+  _setupSensors: function() {
     var self = this;
-    // Browser: use DeviceMotion
+
+    // ---- DeviceMotion (browser surrogate for accel + gyro) ----
     if (typeof DeviceMotionEvent !== 'undefined') {
+      var lastMg = 0;
       var rm = function(e) {
         if (e.accelerationIncludingGravity) {
           self.simAccel.x = e.accelerationIncludingGravity.x || 0;
           self.simAccel.y = e.accelerationIncludingGravity.y || 0;
           self.simAccel.z = e.accelerationIncludingGravity.z || 0;
           self.accelEnabled = true;
+        }
+        if (e.rotationRate) {
+          // rotationRate is in rad/s — convert to degrees per second
+          self.simGyro.x = (e.rotationRate.alpha || 0) * (180 / Math.PI);
+          self.simGyro.y = (e.rotationRate.beta  || 0) * (180 / Math.PI);
+          self.simGyro.z = (e.rotationRate.gamma || 0) * (180 / Math.PI);
+          self.gyroEnabled = true;
+
+          // Auto-calibrate on first gyro data
+          if (!self.calibrated && self.gyroEnabled) {
+            self.calibFrames.push({
+              gx: self.simGyro.x, gy: self.simGyro.y, gz: self.simGyro.z,
+              ax: self.simAccel.x, ay: self.simAccel.y, az: self.simAccel.z,
+              t: Date.now()
+            });
+            if (self.calibFrames.length >= self.CALIB_FRAMES) {
+              self._finishCalibration();
+            }
+          }
         }
       };
       if (typeof DeviceMotionEvent.requestPermission === 'function') {
@@ -87,14 +116,39 @@ var ZeppOS = {
         window.addEventListener('devicemotion', rm);
       }
     }
-    // Expose getAccelData() for game code
-    this.getAccelData = function() { return this.simAccel; };
   },
 
+  _finishCalibration: function() {
+    var n = this.calibFrames.length;
+    var gx = 0, gy = 0, gz = 0;
+    var ax = 0, ay = 0, az = 0;
+    for (var i = 0; i < n; i++) {
+      gx += this.calibFrames[i].gx; gy += this.calibFrames[i].gy; gz += this.calibFrames[i].gz;
+      ax += this.calibFrames[i].ax; ay += this.calibFrames[i].ay; az += this.calibFrames[i].az;
+    }
+    this.gyroOffset.x = gx / n;
+    this.gyroOffset.y = gy / n;
+    this.gyroOffset.z = gz / n;
+    this.accelOffset.x = ax / n;
+    this.accelOffset.y = ay / n;
+    this.accelOffset.z = az / n;
+    this.calibrated = true;
+    this.calibFrames = [];
+    this.vibrate('VIBRATOR_SCENE_NOTIFICATION');
+  },
+
+  recalibrate: function() {
+    this.calibrated = false;
+    this.calibFrames = [];
+    this.gyroOffset = { x: 0, y: 0, z: 0 };
+    this.accelOffset = { x: 0, y: 0, z: 0 };
+  },
+
+  // ---- Gesture handlers (tap, swipe) ----
   _setupGestureHandlers: function() {
     var c = document.getElementById('c');
-    var lastTap = 0, tapTimer = null;
     var sx = 0, sy = 0, sTime = 0;
+    var lastTap = 0;
 
     c.addEventListener('touchstart', function(e) {
       var t = e.touches[0];
@@ -109,7 +163,6 @@ var ZeppOS = {
       var now = Date.now();
 
       if (dist < 15 && dt < 280) {
-        // TAP vs DOUBLE-TAP
         if (now - lastTap < 320) {
           // DOUBLE-TAP — shoot
           if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP');
@@ -118,35 +171,50 @@ var ZeppOS = {
           lastTap = now;
         }
       } else if (dist > 35) {
-        // SWIPE
         var dir = dx > 0 ? 'RIGHT' : 'LEFT';
         if (ZeppOS.gestureCb) ZeppOS.gestureCb('GESTURE_' + dir);
       }
     }, { passive: true });
 
-    // Mouse click for desktop
-    c.addEventListener('click', function(e) {
+    c.addEventListener('click', function() {
       if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP');
     });
   },
 
-  // Game code calls these:
-  getAccelData: function() { return this.simAccel; },
+  // ---- Per-frame sensor data (calibration-subtracted) ----
+  getGyro: function() {
+    return {
+      x: this.simGyro.x - this.gyroOffset.x,
+      y: this.simGyro.y - this.gyroOffset.y,
+      z: this.simGyro.z - this.gyroOffset.z
+    };
+  },
+  getAccel: function() {
+    return {
+      x: this.simAccel.x - this.accelOffset.x,
+      y: this.simAccel.y - this.accelOffset.y,
+      z: this.simAccel.z - this.accelOffset.z
+    };
+  },
+
+  // ---- Haptic feedback ----
   vibrate: function(scene) {
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       var map = {
-        'VIBRATOR_SCENE_SHORT_LIGHT': 20,
-        'VIBRATOR_SCENE_SHORT_MIDDLE': 20,
-        'VIBRATOR_SCENE_SHORT_STRONG': 30,
-        'VIBRATOR_SCENE_DURATION': 300,
-        'VIBRATOR_SCENE_DURATION_LONG': 600,
+        'VIBRATOR_SCENE_SHORT_LIGHT':     15,
+        'VIBRATOR_SCENE_SHORT_MIDDLE':     25,
+        'VIBRATOR_SCENE_SHORT_STRONG':     40,
+        'VIBRATOR_SCENE_DURATION':        300,
+        'VIBRATOR_SCENE_DURATION_LONG':   600,
         'VIBRATOR_SCENE_STRONG_REMINDER': [100, 50, 100, 50, 200],
-        'VIBRATOR_SCENE_NOTIFICATION': [50, 30, 50],
+        'VIBRATOR_SCENE_NOTIFICATION':    [40, 20, 40],
+        'VIBRATOR_SCENE_CALL':            [200, 100, 200, 100, 300],
       };
       var v = map[scene] || 50;
       navigator.vibrate(Array.isArray(v) ? v : v);
     }
   },
+
   onGesture: function(cb) { this.gestureCb = cb; },
 };
 
@@ -176,12 +244,13 @@ var weaponBob = 0, weaponBobY = 0;
 var weaponKickAngle = 0;
 var moving = false;
 
-// ---- Accelerometer tilt controls ----
-// Bip 6 screen orientation: wide end UP (landscape-ish)
-// On watch: X = left/right tilt, Y = forward/back tilt
-// We'll use a simple mapping: accel.x → turn, accel.y → forward/back
-var tiltTurnGain   =  0.025;  // accel.x per unit → turn rad/frame
-var tiltMoveGain   =  0.012;  // accel.y per unit → move speed
+// ---- Gyroscope-based movement controls ----
+// Gyroscope: { x, y, z } in DPS (degrees per second)
+// gyro.z = yaw (twist wrist left/right) → turning
+// gyro.y = pitch (tilt watch up/down) → forward/backward
+// Gyro gives rotation rate — multiply by frame time for angle delta
+var gyroTurnGain   =  0.012;  // gyro.z DPS → turn rad/frame
+var gyroMoveGain   =  0.003;  // gyro.y DPS → move speed
 
 // ---- Map ----
 var MAP_DATA = [
@@ -548,10 +617,17 @@ window.addEventListener('keydown', function(e) {
   if (e.code === 'Digit2') currentWeapon = 1;
   if (e.code === 'Digit3') currentWeapon = 2;
   if (e.code === 'KeyE') spawnEnemyNearby();
+  if (e.code === 'KeyR') ZeppOS.recalibrate();
 });
 window.addEventListener('keyup', function(e) { keys[e.code] = false; });
 
+var lastUpdateTime = performance.now();
+
 function update() {
+  var now = performance.now();
+  var dt = Math.min((now - lastUpdateTime) / 1000, 0.1); // seconds, capped at 100ms
+  lastUpdateTime = now;
+
   if (weaponCooldown > 0) weaponCooldown--;
   if (muzzleFlash > 0) muzzleFlash--;
   if (damageFlash > 0) damageFlash--;
@@ -562,10 +638,13 @@ function update() {
   if (moving) { weaponBob += 0.12; weaponBobY = Math.sin(weaponBob) * 3; }
   else weaponBobY *= 0.85;
 
-  // Tilt-based movement (from accelerometer)
-  var accel = ZeppOS.getAccelData();
-  var tiltTurn   = accel.x * tiltTurnGain;
-  var tiltForward = -accel.y * tiltMoveGain;
+  // Gyroscope-based movement
+  // gyro.z = yaw rate (DPS) — twist wrist left/right → turn
+  // gyro.y = pitch rate (DPS) — tilt watch up/down → move forward/back
+  // Gyro is already calibrated (offset subtracted) in ZeppOS.getGyro()
+  var gyro = ZeppOS.getGyro();
+  var gyroTurn   = gyro.z * gyroTurnGain * dt * 60;  // DPS × gain × dt × 60fps norm
+  var gyroFwd    = gyro.y * gyroMoveGain * dt * 60;
 
   // Keyboard overrides
   var kTurn = 0, kFwd = 0;
@@ -575,8 +654,8 @@ function update() {
   if (keys['ArrowDown']  || keys['KeyS']) kFwd -= MOVE_SPD;
   if (keys['Space']) tryShoot();
 
-  var totalTurn = tiltTurn + kTurn;
-  var totalFwd  = tiltForward + kFwd;
+  var totalTurn = gyroTurn + kTurn;
+  var totalFwd  = gyroFwd + kFwd;
 
   player.angle += totalTurn;
   player.angle = ((player.angle % TAU) + TAU) % TAU;
@@ -730,11 +809,11 @@ function render() {
   ctx.fillText(dirs[dirIdx], W/2, 7);
   ctx.textAlign = 'left';
 
-  // Tilt indicator (right)
-  if (ZeppOS.accelEnabled) {
+  // Sensor indicator (right) — shows GYRO ON when active, CALIBRATING... when collecting data
+  if (ZeppOS.gyroEnabled) {
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#2a6a2a';
-    ctx.fillText('TILT ON', W - PAD, 7);
+    ctx.fillStyle = ZeppOS.calibrated ? '#2a7a2a' : '#7a7a2a';
+    ctx.fillText(ZeppOS.calibrated ? 'GYRO ON' : 'CALIBRATING', W - PAD, 7);
     ctx.textAlign = 'left';
   } else {
     ctx.textAlign = 'right';

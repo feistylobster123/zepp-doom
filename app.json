@@ -30,10 +30,18 @@
       "platforms": [
         {
           "name": "bip-6",
-          "deviceSource": 65536
+          "deviceSource": 9765120
+        },
+        {
+          "name": "bip-6-2",
+          "deviceSource": 9765121
+        },
+        {
+          "name": "bip-6-3",
+          "deviceSource": 10158337
         }
       ],
-      "designWidth": 360
+      "designWidth": 390
     },
     "gtr3-pro": {
       "module": {

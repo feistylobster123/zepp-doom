@@ -1,61 +1,142 @@
 # Zepp OS / Amazfit Bip 6 Research Notes
 
 ## Project Start Time
-Started: 2026-03-31 (12-hour development session)
+Started: 2026-03-31
 
-## Sources
-- Main docs: https://docs.zepp.com/docs/intro/
-- Simulator: https://docs.zepp.com/docs/guides/tools/simulator/
-- GitHub org: https://github.com/zepp-health
-- Developer site: https://developer.zepp.com/os/home
+## Last Updated: 2026-04-01
 
-## Device: Amazfit Bip 6
-- Part of Zepp OS ecosystem (Zepp Health, formerly Huami/Amazfit)
-- The Bip series is the budget line with always-on LCD display
-- Bip 6 likely uses Zepp OS 5 (based on 2025 release timeline)
+---
+
+## Device: Amazfit Bip 6 — CONFIRMED
+
+**CONFIRMED from official Zepp OS device list (docs.zepp.com)**
+
+| Property | Value |
+|----------|-------|
+| **Screen Resolution** | 390 x 450 pixels |
+| **Screen Shape** | Square (rounded corners, radius 86) |
+| **deviceSource (codename)** | `9765120*`, `9765121`, `10158337` |
+| **API_LEVEL** | 4.2 (latest) |
+| **Zepp OS Version** | 5.0 |
+| **Physical Keys** | 2 buttons |
+| **SecondaryWidget** | YES |
+| **Watchface Preview** | 266 x 307 |
+
+### Sensors Available (API_LEVEL 4.2)
+
+From `@zos/sensor`:
+- **Accelerometer** — `{x, y, z}` in cm/s², `FREQ_MODE_LOW/NORMAL/HIGH`
+- **Gyroscope** — `{x, y, z}` in DPS (degrees per second), `FREQ_MODE_LOW/NORMAL/HIGH`
+- Permissions: `device:os.accelerometer`, `device:os.gyroscope`
+
+From `@zos/interaction`:
+- **Gestures** — `GESTURE_UP`, `GESTURE_DOWN`, `GESTURE_LEFT`, `GESTURE_RIGHT`
+- **No tap/double-tap sensor** — must use double-tap on gesture or button
+
+From `@zos/sensor`:
+- **Vibrator** — `VIBRATOR_SCENE_SHORT_LIGHT/MIDDLE/STRONG`, `VIBRATOR_SCENE_DURATION`, `VIBRATOR_SCENE_STRONG_REMINDER`, `VIBRATOR_SCENE_NOTIFICATION`, `VIBRATOR_SCENE_CALL`
+
+Health sensors (may need separate permissions):
+- Heart rate, SpO2, PAI, sleep, steps, stress — available via `@zos/sensor`
+
+### Screen Technology
+- Bip series: **always-on LCD** (not AMOLED — important for power)
+- Square shape with rounded corners
+
+### Nearby Zepp OS Devices (for reference)
+| Device | Resolution | Shape | deviceSource |
+|--------|-----------|-------|--------------|
+| Amazfit Active 2 (Square) | 390 x 450 | Square | 10223872 |
+| Amazfit Bip 6 | 390 x 450 | Square | 9765120 |
+| Amazfit Active (Square) | 390 x 450 | Square | 8323328 |
+| Amazfit GTS 4 (Square) | 390 x 450 | Square | 7995648 |
+| Amazfit T-Rex 3 Pro | 466 x 466 | Round | 10682624 |
+| Amazfit Balance 2 | 480 x 480 | Round | 9568512 |
+
+---
 
 ## Zepp OS Overview
-- JavaScript/TypeScript based development (Zeus CLI)
-- Mini Programs (like mini-apps) + Watch Faces
-- Framework: Proprietary but similar to WeChat Mini Program / Flipper Zero dev style
-- API_LEVEL system (current: 4.2 per docs)
-- NOT a standard web environment — no DOM, no WebGL, no standard Canvas API
+- JavaScript/TypeScript development via **Zeus CLI**
+- Mini Programs (apps) + Watch Faces
+- **API_LEVEL 4.2** — class-based sensor APIs (`@zos/sensor`)
+- NOT standard web — **no DOM, no Canvas 2D, no WebGL**
+- Graphics: **FILL_RECT pixel-level drawing** via widget system
 
-## Simulator Downloads (v2.1.0)
-- macOS ARM64: simulator-2.1.0-macos-arm64.dmg
-- macOS x64: simulator-2.1.0-macos-x64.dmg
-- Windows x64: simulator_2.1.0_x64.exe
-- Linux AMD64: simulator_2.1.0_amd64.deb
-- Linux ARM64: simulator_2.1.0_arm64.deb
-- Download URL base: https://upload-cdn.zepp.com/zepp-applet-and-wechat-applet/
+## Graphics Constraint — Critical
+**Zepp OS has NO Canvas 2D or WebGL.**
+- Only widget-based UI: `RectWidget`, `ImgWidget`, `TextWidget`, etc.
+- `FILL_RECT` per-pixel rectangle fills are the only drawing primitive
+- Doom port must use a **flat color rectangle** for each vertical wall strip
+- No textures, no sprites as images — must draw sprites with FILL_RECT too
+- Solution: Column raycaster + sprite billboard rendering via FILL_RECT
 
-## Key Tools
-- Zeus CLI: https://docs.zepp.com/docs/guides/tools/cli/
-- Device Simulator: separate download from within the Zepp App
-- Console: https://console.zepp.com/ (for app signing/deployment)
+## Critical Constraints
+- **No Canvas API** — must use FILL_RECT for all rendering
+- **No WebGL** — pure widget API only
+- App size: ~1-10MB max
+- RAM: ~64MB or less (Bip series budget line)
+- CPU: ARM (specific model TBD — likely 500MHz-1GHz single/dual-core)
+- FPS target: 10-15fps on watch hardware
 
-## Graphics APIs in Zepp OS
-- The framework uses a proprietary widget/UI system
-- Likely NO Canvas 2D API (unlike web)
-- Screen drawing through declarative UI widgets
-- Need to research exact graphics capabilities
+## Sensor Control Scheme
+### Gyroscope (primary — for movement)
+- `Gyroscope` from `@zos/sensor`
+- `gyro.z` = yaw rate (DPS) — **twist watch left/right** → turn character
+- `gyro.y` = pitch rate (DPS) — **tilt watch forward/back** → move forward/back
+- **Auto-calibrates** at startup (30 frames to capture neutral offset)
+- Frame-time scaling: `angle_delta = gyro_dps * gain * dt * 60`
 
-## Critical Constraints (estimated)
-- App size: Likely 1-10MB max
-- RAM: Watch has 64MB or less (Bip series is budget)
-- CPU: ARM Cortex-A series, likely single-core or dual-core at 500MHz-1GHz
-- Display: ~360x360 to 416x416 pixels (square or rectangle)
-- No hardware graphics acceleration expected
+### Accelerometer (optional — for alt movement)
+- `Accelerometer` from `@zos/sensor`
+- `{x, y, z}` in cm/s²
+- Could detect specific gestures (shake to reload, etc.)
+
+### Gestures
+- `onGesture(GESTURE_LEFT/RIGHT)` — swipe left/right → change weapon
+- No tap sensor — double-tap is a swipe-within-5px — not reliably usable
+- **Buttons** are the reliable shoot trigger on Bip 6 (2 buttons)
+
+### Button Mapping (Bip 6 — 2 buttons)
+- Upper button: SELECT / confirm
+- Lower button: BACK
+- On watch: upper button = shoot (primary action)
+
+---
+
+## Architecture: Simulator vs Real Device
+
+### sim-game.html
+- Standalone browser file (open directly, no server)
+- Uses `DeviceMotion` API as gyro/accel surrogate
+- Canvas 2D API (browser) for rendering
+- `ZeppOS` compatibility layer with same interface as real device
+- No actual Zepp OS imports
+
+### Real device (page/doom/index.js)
+```javascript
+import { Gyroscope, Accelerometer, FREQ_MODE_NORMAL } from '@zos/sensor';
+import { Vibrator } from '@zos/sensor';
+import { onGesture } from '@zos/interaction';
+// FILL_RECT-based rendering (no Canvas)
+```
+
+### Build targets (app.json)
+- `bip-6`: deviceSource `9765120`, designWidth 390
+- `gtr3-pro`: deviceSource `229/230`, designWidth 480
+- `gtr3`: deviceSource `226/227`, designWidth 454
+- `gts4`: deviceSource `7995648/7995649`, designWidth 390
+
+---
 
 ## To Research Further
-1. Exact Bip 6 hardware specs (CPU, RAM, display)
-2. Zepp OS graphics API — can you draw arbitrary pixels?
-3. Is there a Canvas-like API for game rendering?
-4. Maximum app size limit
-5. Existing game ports on Zepp OS
-6. How does the Zepp OS framework compare to Squarp OS or other watch OS
+1. Bip 6 CPU/RAM/storage specs (not in device table)
+2. Real-world rendering performance of FILL_RECT on Bip 6
+3. How to render sprites (billboard via FILL_RECT rectangles)?
+4. Audio support on Zepp OS (sound effects?)
+5. How to build/deploy to device (Zeus CLI workflow)
+6. Actual FPS achievable with column raycaster on Bip 6 hardware
 
-## Risks
-- If Zepp OS has no pixel-level drawing API, Doom port may be impossible without native code
-- The Bip series may not have enough RAM to hold a Doom WAD
-- Rendering at 30+ FPS on a ~500MHz ARM with no GPU will be extremely challenging
+## Simulator Download
+- v2.1.0: https://docs.zepp.com/docs/guides/tools/simulator/download/
+- Linux AMD64: `simulator-2.1.0_amd64.deb`
+- Linux ARM64: `simulator-2.1.0_arm64.deb`
