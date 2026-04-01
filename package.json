@@ -1,0 +1,24 @@
+{
+  "name": "zepp-doom",
+  "version": "0.1.0",
+  "description": "Doom port for Zepp OS watches",
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "dev": "zeus dev",
+    "build": "zeus build",
+    "clean": "zeus clean"
+  },
+  "keywords": [
+    "zeppos",
+    "doom",
+    "game",
+    "watch"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@zeppos/zeus-cli": "^1.8.2",
+    "zeppos-app-utils": "^1.0.0"
+  }
+}

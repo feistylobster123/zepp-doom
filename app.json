@@ -1,0 +1,100 @@
+{
+  "configVersion": "v2",
+  "app": {
+    "appId": 143258,
+    "appName": "Zepp DOOM",
+    "appType": "app",
+    "version": {
+      "code": 1,
+      "name": "1.0.0"
+    },
+    "icon": "assets/icon.png",
+    "vender": "zepp",
+    "description": "Classic DOOM on your Zepp OS watch"
+  },
+  "permissions": [],
+  "runtime": {
+    "apiVersion": {
+      "compatible": "4.2",
+      "target": "4.2",
+      "minVersion": "4.2"
+    }
+  },
+  "targets": {
+    "bip-6": {
+      "module": {
+        "page": {
+          "pages": ["page/doom/index"]
+        }
+      },
+      "platforms": [
+        {
+          "name": "bip-6",
+          "deviceSource": 65536
+        }
+      ],
+      "designWidth": 360
+    },
+    "gtr3-pro": {
+      "module": {
+        "page": {
+          "pages": ["page/doom/index"]
+        }
+      },
+      "platforms": [
+        {
+          "name": "gtr3-pro",
+          "deviceSource": 229
+        },
+        {
+          "name": "gtr3-pro-w",
+          "deviceSource": 230
+        }
+      ],
+      "designWidth": 480
+    },
+    "gtr3": {
+      "module": {
+        "page": {
+          "pages": ["page/doom/index"]
+        }
+      },
+      "platforms": [
+        {
+          "name": "gtr3",
+          "deviceSource": 226
+        },
+        {
+          "name": "gtr3-w",
+          "deviceSource": 227
+        }
+      ],
+      "designWidth": 454
+    },
+    "gts4": {
+      "module": {
+        "page": {
+          "pages": ["page/doom/index"]
+        }
+      },
+      "platforms": [
+        {
+          "name": "gts4",
+          "deviceSource": 7995648
+        },
+        {
+          "name": "gts4-w",
+          "deviceSource": 7995649
+        }
+      ],
+      "designWidth": 390
+    }
+  },
+  "i18n": {
+    "en-US": {
+      "appName": "Zepp DOOM"
+    }
+  },
+  "defaultLanguage": "en-US",
+  "debug": true
+}
