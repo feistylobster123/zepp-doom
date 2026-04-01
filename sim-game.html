@@ -1,120 +1,187 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #111; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: monospace; }
-  #c { border: 1px solid #333; display: block; }
-  #hud { color: #ccc; font-size: 12px; margin-top: 8px; text-align: center; min-height: 20px; line-height: 1.6; letter-spacing: 0.5px; }
-  #label { color: #555; font-size: 10px; margin-top: 4px; }
-  #controls { color: #666; font-size: 10px; margin-top: 4px; }
-  .hud-row { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; }
-  .hud-item { display: inline-flex; flex-direction: column; align-items: center; min-width: 52px; }
-  .hud-label { font-size: 9px; color: #888; letter-spacing: 1px; }
-  .hud-value { font-size: 16px; font-weight: bold; font-family: monospace; }
-  .hud-bar { width: 80px; height: 8px; background: #222; border: 1px solid #444; margin-top: 2px; }
-  .hud-bar-fill { height: 100%; }
-  .bar-health { background: linear-gradient(90deg, #8b0000, #ff2222); }
-  .bar-armor  { background: linear-gradient(90deg, #00008b, #2244ff); }
-  .bar-ammo   { background: linear-gradient(90deg, #885500, #ffaa00); }
-  #fps { font-size: 10px; color: #666; }
+  html, body {
+    background: #080808;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: monospace;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  #c {
+    border-radius: 18px;
+    box-shadow: 0 0 60px rgba(0,0,0,0.9);
+    display: block;
+  }
+  #info {
+    color: #333;
+    font-size: 9px;
+    margin-top: 10px;
+    font-family: monospace;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
-<canvas id="c" width="360" height="360"></canvas>
-<div id="hud">
-  <div class="hud-row">
-    <div class="hud-item">
-      <span class="hud-label">HEALTH</span>
-      <span class="hud-value" id="h-health" style="color:#ff4444">100</span>
-      <div class="hud-bar"><div class="hud-bar-fill bar-health" id="bar-health" style="width:100%"></div></div>
-    </div>
-    <div class="hud-item">
-      <span class="hud-label">ARMOR</span>
-      <span class="hud-value" id="h-armor" style="color:#4488ff">0</span>
-      <div class="hud-bar"><div class="hud-bar-fill bar-armor" id="bar-armor" style="width:0%"></div></div>
-    </div>
-    <div class="hud-item">
-      <span class="hud-label">AMMO</span>
-      <span class="hud-value" id="h-ammo" style="color:#ffaa00">50</span>
-      <div class="hud-bar"><div class="hud-bar-fill bar-ammo" id="bar-ammo" style="width:100%"></div></div>
-    </div>
-    <div class="hud-item">
-      <span class="hud-label">WEAPON</span>
-      <span class="hud-value" id="h-weapon" style="color:#dddddd;font-size:12px">PISTOL</span>
-    </div>
-    <div class="hud-item">
-      <span class="hud-label">KILLS</span>
-      <span class="hud-value" id="h-kills" style="color:#ff8800">0</span>
-    </div>
-  </div>
-  <div id="fps">FPS:--</div>
-</div>
-<div id="label">ZEPP DOOM — Column Raycaster v3.0<br>Weapon + HUD System</div>
-<div id="controls">WASD: move+turn | SPACE: fire | 1/2/3: weapon | E: spawn enemy | DRAG: look</div>
+<canvas id="c"></canvas>
+<div id="info">BIP-DOOM | Bip 6 390x450 | Tilt: Move | Swipe L/R: Weapon | Dbl-Tap: Shoot</div>
 <script>
-// ============================================================
-// ZEP-DOOM  — Column Raycaster with Full Weapon + HUD System
-// ============================================================
+'use strict';
 
-// ---- Globals ----
+// ================================================================
+// ZEP-DOOM — Bip 6 Edition
+// Target: Amazfit Bip 6 — 390×450, Square, API_LEVEL 4.2
+// Controls: Tilt to move, Swipe L/R to change weapon, Dbl-Tap to shoot
+// ================================================================
+
+// ---- Resolution: Bip 6 native ----
+var W = 390, H = 450;
+
+// ================================================================
+// ZEPP OS COMPATIBILITY LAYER (for real device)
+// This is replaced by actual Zepp OS imports on device:
+//   import { Accelerometer } from '@zos/sensor'
+//   import { Vibrator } from '@zos/sensor'
+//   import { onGesture } from '@zos/interaction'
+// ================================================================
+var ZeppOS = {
+  accel:       null,
+  gyro:        null,
+  vibrator:    null,
+  gestureCb:   null,
+  simAccel:    { x: 0, y: 0, z: 9.8 },
+  accelEnabled: false,
+  gyroEnabled:  false,
+
+  init: function() {
+    this._setupAccelerometer();
+    this._setupGestureHandlers();
+  },
+
+  _setupAccelerometer: function() {
+    var self = this;
+    // Browser: use DeviceMotion
+    if (typeof DeviceMotionEvent !== 'undefined') {
+      var rm = function(e) {
+        if (e.accelerationIncludingGravity) {
+          self.simAccel.x = e.accelerationIncludingGravity.x || 0;
+          self.simAccel.y = e.accelerationIncludingGravity.y || 0;
+          self.simAccel.z = e.accelerationIncludingGravity.z || 0;
+          self.accelEnabled = true;
+        }
+      };
+      if (typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission().then(function(r) {
+          if (r === 'granted') window.addEventListener('devicemotion', rm);
+        }).catch(function() {});
+      } else {
+        window.addEventListener('devicemotion', rm);
+      }
+    }
+    // Expose getAccelData() for game code
+    this.getAccelData = function() { return this.simAccel; };
+  },
+
+  _setupGestureHandlers: function() {
+    var c = document.getElementById('c');
+    var lastTap = 0, tapTimer = null;
+    var sx = 0, sy = 0, sTime = 0;
+
+    c.addEventListener('touchstart', function(e) {
+      var t = e.touches[0];
+      sx = t.clientX; sy = t.clientY; sTime = Date.now();
+    }, { passive: true });
+
+    c.addEventListener('touchend', function(e) {
+      var dx = e.changedTouches[0].clientX - sx;
+      var dy = e.changedTouches[0].clientY - sy;
+      var dt = Date.now() - sTime;
+      var dist = Math.sqrt(dx*dx + dy*dy);
+      var now = Date.now();
+
+      if (dist < 15 && dt < 280) {
+        // TAP vs DOUBLE-TAP
+        if (now - lastTap < 320) {
+          // DOUBLE-TAP — shoot
+          if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP');
+          lastTap = 0;
+        } else {
+          lastTap = now;
+        }
+      } else if (dist > 35) {
+        // SWIPE
+        var dir = dx > 0 ? 'RIGHT' : 'LEFT';
+        if (ZeppOS.gestureCb) ZeppOS.gestureCb('GESTURE_' + dir);
+      }
+    }, { passive: true });
+
+    // Mouse click for desktop
+    c.addEventListener('click', function(e) {
+      if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP');
+    });
+  },
+
+  // Game code calls these:
+  getAccelData: function() { return this.simAccel; },
+  vibrate: function(scene) {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      var map = {
+        'VIBRATOR_SCENE_SHORT_LIGHT': 20,
+        'VIBRATOR_SCENE_SHORT_MIDDLE': 20,
+        'VIBRATOR_SCENE_SHORT_STRONG': 30,
+        'VIBRATOR_SCENE_DURATION': 300,
+        'VIBRATOR_SCENE_DURATION_LONG': 600,
+        'VIBRATOR_SCENE_STRONG_REMINDER': [100, 50, 100, 50, 200],
+        'VIBRATOR_SCENE_NOTIFICATION': [50, 30, 50],
+      };
+      var v = map[scene] || 50;
+      navigator.vibrate(Array.isArray(v) ? v : v);
+    }
+  },
+  onGesture: function(cb) { this.gestureCb = cb; },
+};
+
+// ================================================================
+// GAME STATE
+// ================================================================
 var player = { x: 7.5, y: 7.5, angle: 0, health: 100, armor: 0, kills: 0 };
-var autoDemo = false;
-var keys = {};
-var isDragging = false, lastX = 0;
-var canvas, ctx;
-var frameCount = 0, fps = 0, lastTime = 0;
-var running = false;
+var enemies = [];
+var nextEnemyId = 0;
+var FPS = 0, frameCount = 0, lastFpsTime = 0;
+var running = true;
 
 // ---- Weapons ----
 var WEAPONS = [
-  {
-    id: 'PISTOL',
-    damage: 15,
-    pellets: 1,
-    fireRate: 18,      // frames between shots
-    spread: 0,         // radians total spread
-    ammoType: 'BULLET',
-    muzzleFlash: 4,
-    screenKick: 0.02,
-    name: 'PISTOL'
-  },
-  {
-    id: 'SHOTGUN',
-    damage: 10,
-    pellets: 7,
-    fireRate: 32,
-    spread: 0.18,
-    ammoType: 'SHELL',
-    ammoMax: 20,
-    muzzleFlash: 8,
-    screenKick: 0.06,
-    name: 'SHOTGUN'
-  },
-  {
-    id: 'CHAINGUN',
-    damage: 8,
-    pellets: 1,
-    fireRate: 5,
-    spread: 0.04,
-    ammoType: 'BULLET',
-    muzzleFlash: 2,
-    screenKick: 0.015,
-    name: 'CHAINGUN'
-  }
+  { id: 'PISTOL',   damage: 15, pellets: 1, fireRate: 18, spread: 0,    ammoType: 'BULLET', ammoMax: 200, muzzleFlash: 4, screenKick: 0.02, name: 'PISTOL' },
+  { id: 'SHOTGUN',  damage: 10, pellets: 7, fireRate: 32, spread: 0.18, ammoType: 'SHELL',  ammoMax: 20,  muzzleFlash: 8, screenKick: 0.06, name: 'SHOTGUN' },
+  { id: 'CHAINGUN', damage: 8,  pellets: 1, fireRate: 5,  spread: 0.04, ammoType: 'BULLET', ammoMax: 200, muzzleFlash: 2, screenKick: 0.015, name: 'CHAINGUN' }
 ];
-var AMMO = { BULLET: 50, SHELL: 8 };
+var AMMO     = { BULLET: 50, SHELL: 8 };
 var MAX_AMMO = { BULLET: 200, SHELL: 50 };
 var currentWeapon = 0;
 var weaponCooldown = 0;
-var weaponBob = 0;      // current bob phase
-var weaponBobY = 0;    // y offset from bob
-var weaponKick = 0;    // screen kick angle offset
-var weaponKickX = 0;   // x offset from screen shake
 var muzzleFlash = 0;
 var damageFlash = 0;
-var hitMarker = 0;     // frames to show crosshair hit flash
-var keys_collected = { red: false, blue: false, yellow: false };
+var hitMarker = 0;
+var weaponBob = 0, weaponBobY = 0;
+var weaponKickAngle = 0;
+var moving = false;
+
+// ---- Accelerometer tilt controls ----
+// Bip 6 screen orientation: wide end UP (landscape-ish)
+// On watch: X = left/right tilt, Y = forward/back tilt
+// We'll use a simple mapping: accel.x → turn, accel.y → forward/back
+var tiltTurnGain   =  0.025;  // accel.x per unit → turn rad/frame
+var tiltMoveGain   =  0.012;  // accel.y per unit → move speed
 
 // ---- Map ----
 var MAP_DATA = [
@@ -155,7 +222,7 @@ var FLOOR_DATA = [
 ];
 var MAP_W = 16, MAP_H = 16;
 
-// ---- Imp sprite (16x20) ----
+// ---- Sprite data ----
 var SPR_IMP = [
   "0000011111100000",
   "0000122222210000",
@@ -202,66 +269,41 @@ var SPR_IMP_DEAD = [
 ];
 
 function decodeSprite(rows) {
-  var colors = ['#000','#200','#a22','#f44','#d87'];
+  var cols = ['#000','#200','#a22','#f44','#d87'];
   return rows.map(function(row) {
     return row.split('').map(function(ch) {
-      return ch === '0' ? null : colors[parseInt(ch)];
+      return ch === '0' ? null : cols[parseInt(ch)];
     });
   });
 }
-var SPR_IMP_DEC   = decodeSprite(SPR_IMP);
-var SPR_DEAD_DEC  = decodeSprite(SPR_IMP_DEAD);
+var SPR_IMP_DEC  = decodeSprite(SPR_IMP);
+var SPR_DEAD_DEC = decodeSprite(SPR_IMP_DEAD);
 
-// ---- Enemy state machine ----
+// ---- Enemy system ----
 var S = { PATROL: 0, CHASE: 1, ATTACK: 2, DEAD: 3, PAIN: 4 };
 var ENEMY_DEF = {
   speed: 0.025, chaseSpeed: 0.038, seeRange: 6.0,
   attackRange: 1.4, health: 30, painChance: 0.25,
   attackDamage: 6, attackCooldown: 50
 };
-var enemies = [];
-var nextEnemyId = 0;
 
 function spawnEnemy(x, y) {
-  enemies.push({
-    id: nextEnemyId++, x: x, y: y,
-    angle: Math.random() * Math.PI * 2,
-    health: ENEMY_DEF.health, state: S.PATROL,
-    stateT: 0, atkCool: 0, painT: 0,
-    seeAngle: 0, dead: false, deadT: 0, hitFlash: 0
-  });
+  enemies.push({ id: nextEnemyId++, x: x, y: y, angle: Math.random() * Math.PI * 2,
+    health: ENEMY_DEF.health, state: S.PATROL, stateT: 0, atkCool: 0,
+    painT: 0, seeAngle: 0, dead: false, deadT: 0, hitFlash: 0 });
+}
+function spawnEnemyNearby() {
+  var a = player.angle + Math.PI + (Math.random() - 0.5) * 1.5;
+  var d = 2 + Math.random() * 2;
+  spawnEnemy(
+    Math.max(1, Math.min(MAP_W-2, player.x + Math.cos(a) * d)),
+    Math.max(1, Math.min(MAP_H-2, player.y + Math.sin(a) * d))
+  );
 }
 spawnEnemy(4.5, 7.5);
 spawnEnemy(10.5, 4.5);
 spawnEnemy(10.5, 10.5);
 spawnEnemy(7.5, 4.5);
-
-// ---- Sprite drawing ----
-function drawSprite(sprite, sx, sy, sw, sh, fog) {
-  var rows = sprite.length, cols = sprite[0].length;
-  for (var r = 0; r < rows; r++) {
-    var py = (sy + r * sh / rows) | 0;
-    if (py < CEIL_BOT || py >= H) continue;
-    var nextPy = (sy + (r + 1) * sh / rows) | 0;
-    var rowH = nextPy - py;
-    for (var c = 0; c < cols; c++) {
-      var color = sprite[r][c];
-      if (!color) continue;
-      var px = (sx + c * sw / cols) | 0;
-      if (px < 0 || px >= W) continue;
-      var nextPx = (sx + (c + 1) * sw / cols) | 0;
-      var colW = nextPx - px;
-      var cr = parseInt(color.slice(1,3), 16);
-      var cg = parseInt(color.slice(3,5), 16);
-      var cb = parseInt(color.slice(5,7), 16);
-      var fr = Math.min(255, cr * fog) | 0;
-      var fg = Math.min(255, cg * fog) | 0;
-      var fb = Math.min(255, cb * fog) | 0;
-      ctx.fillStyle = 'rgb(' + fr + ',' + fg + ',' + fb + ')';
-      ctx.fillRect(px, py, colW + 1, rowH + 1);
-    }
-  }
-}
 
 // ---- Trig ----
 var TAU = Math.PI * 2, PREC = 360;
@@ -281,32 +323,29 @@ function fcos(a) {
   return COS_T[idx];
 }
 
-// ---- Raycaster ----
-var NUM_RAYS   = 120;
-var FOV        = Math.PI / 3;
-var HALF_FOV   = FOV / 2;
-var W = 360, H = 360;
-var CEIL_BOT   = H * 0.28 | 0;
-var WALL_BOT   = H * 0.72 | 0;
+// ---- Raycaster constants (Bip 6 390x450) ----
+var NUM_RAYS    = 130;   // slightly more rays for higher res
+var FOV         = Math.PI / 3;
+var HALF_FOV    = FOV / 2;
+var CEIL_BOT    = (H * 0.26) | 0;   // ~117
+var WALL_BOT    = (H * 0.74) | 0;   // ~333
 var WALL_ZONE_H = WALL_BOT - CEIL_BOT;
-var HALF_WZH   = WALL_ZONE_H / 2;
-var NUM_CEIL   = 16;
-var NUM_FLR    = 16;
+var HALF_WZH    = WALL_ZONE_H / 2;
+var NUM_CEIL    = 16;
+var NUM_FLR     = 16;
 
 var stripDistFloor = new Float32Array(NUM_FLR);
 var stripDistCeil  = new Float32Array(NUM_CEIL);
 for (var sfi = 0; sfi < NUM_FLR; sfi++) {
-  var offF = ((sfi + 0.5) / NUM_FLR) - 0.5;
-  stripDistFloor[sfi] = HALF_WZH / (offF + 0.001);
+  stripDistFloor[sfi] = HALF_WZH / (((((sfi + 0.5) / NUM_FLR) - 0.5)) + 0.001);
 }
 for (var ci = 0; ci < NUM_CEIL; ci++) {
-  var offC = ((NUM_CEIL - ci - 0.5) / NUM_CEIL) - 0.5;
-  stripDistCeil[ci] = HALF_WZH / (offC + 0.001);
+  stripDistCeil[ci] = HALF_WZH / (((((NUM_CEIL - ci - 0.5) / NUM_CEIL) - 0.5)) + 0.001);
 }
 
+// ---- DDA ----
 function castRay(px, py, angle) {
-  var a = angle % TAU;
-  if (a < 0) a += TAU;
+  var a = angle % TAU; if (a < 0) a += TAU;
   var rdx = fcos(a), rdy = fsin(a);
   var mx = px | 0, my = py | 0;
   var ddX = Math.abs(1 / rdx), ddY = Math.abs(1 / rdy);
@@ -337,24 +376,20 @@ function canMove(x, y) {
   };
   return check(-r,-r) && check(r,-r) && check(-r,r) && check(r,r);
 }
-
 function canMoveEnemy(x, y) {
   var r = 0.2;
   var corners = [[-r,-r],[r,-r],[-r,r],[r,r]];
   for (var i = 0; i < 4; i++) {
-    var cx = (x + corners[i][0])|0, cy = (y + corners[i][1])|0;
+    var cx = (x+corners[i][0])|0, cy = (y+corners[i][1])|0;
     if (cx < 0 || cx >= MAP_W || cy < 0 || cy >= MAP_H) return false;
-    if (MAP_DATA[cy * MAP_W + cx] > 0) return false;
+    if (MAP_DATA[cy*MAP_W+cx] > 0) return false;
   }
   return true;
 }
 
 // ---- Enemy AI ----
-function enemyDistToPlayer(e) {
-  var dx = player.x - e.x, dy = player.y - e.y;
-  return Math.sqrt(dx*dx + dy*dy);
-}
-function enemyAngleToPlayer(e) { return Math.atan2(player.y - e.y, player.x - e.x); }
+function enemyDistToPlayer(e) { return Math.sqrt((player.x-e.x)**2 + (player.y-e.y)**2); }
+function enemyAngleToPlayer(e) { return Math.atan2(player.y-e.y, player.x-e.x); }
 function angleDiff(a, b) {
   var d = a - b;
   while (d > Math.PI) d -= Math.PI * 2;
@@ -362,9 +397,8 @@ function angleDiff(a, b) {
   return Math.abs(d);
 }
 function enemyCanSeePlayer(e) {
-  var dx = player.x - e.x, dy = player.y - e.y;
-  var dist = Math.sqrt(dx*dx + dy*dy);
-  if (dist > ENEMY_DEF.seeRange) return false;
+  var d = enemyDistToPlayer(e);
+  if (d > ENEMY_DEF.seeRange) return false;
   return angleDiff(enemyAngleToPlayer(e), e.angle) < Math.PI * 0.4;
 }
 
@@ -373,13 +407,11 @@ function updateEnemy(e) {
   if (e.atkCool > 0) e.atkCool--;
   if (e.painT > 0) e.painT--;
   if (e.hitFlash > 0) e.hitFlash--;
-
   if (e.dead) { e.deadT++; return; }
 
   var dist = enemyDistToPlayer(e);
   var angleToPlayer = enemyAngleToPlayer(e);
 
-  // Smooth turn toward player when alert
   if (e.state === S.CHASE || e.state === S.ATTACK) {
     var diff = angleToPlayer - e.angle;
     while (diff > Math.PI) diff -= Math.PI * 2;
@@ -406,11 +438,12 @@ function updateEnemy(e) {
     case S.ATTACK:
       if (dist > ENEMY_DEF.attackRange * 1.5) { e.state = S.CHASE; e.stateT = 0; break; }
       if (e.atkCool === 0) {
-        var kb = 0.15;
-        var kbAngle = Math.atan2(player.y - e.y, player.x - e.x);
+        var kbAngle = Math.atan2(player.y-e.y, player.x-e.x);
         player.health -= ENEMY_DEF.attackDamage;
         if (player.health < 0) player.health = 0;
         damageFlash = 10;
+        ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_STRONG');
+        var kb = 0.15;
         if (canMove(player.x - Math.cos(kbAngle)*kb, player.y - Math.sin(kbAngle)*kb)) {
           player.x -= Math.cos(kbAngle)*kb;
           player.y -= Math.sin(kbAngle)*kb;
@@ -428,42 +461,37 @@ function updateEnemy(e) {
 // ---- Shooting ----
 function tryShoot() {
   var wp = WEAPONS[currentWeapon];
-  if (weaponCooldown > 0) return;
-  var ammoType = wp.ammoType;
-  if (AMMO[ammoType] <= 0) return;
-
-  AMMO[ammoType]--;
+  if (weaponCooldown > 0 || AMMO[wp.ammoType] <= 0) return;
+  AMMO[wp.ammoType]--;
   weaponCooldown = wp.fireRate;
   muzzleFlash = wp.muzzleFlash;
-  weaponKick = wp.screenKick;
+  weaponKickAngle = wp.screenKick;
+  ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_LIGHT');
 
   var px = player.x, py = player.y;
   var baseAngle = player.angle;
-
-  // Fire one or more pellets
   var hitSomething = false;
+
   for (var p = 0; p < wp.pellets; p++) {
     var spread = (Math.random() - 0.5) * wp.spread;
     var angle = baseAngle + spread;
     var rdx = Math.cos(angle), rdy = Math.sin(angle);
 
-    // Raycast
-    var mx = px | 0, my = py | 0;
-    var ddX = Math.abs(1 / rdx), ddY = Math.abs(1 / rdy);
+    var mx = px|0, my = py|0;
+    var ddX = Math.abs(1/rdx), ddY = Math.abs(1/rdy);
     var sX = rdx < 0 ? -1 : 1, sY = rdy < 0 ? -1 : 1;
-    var sdX = rdx < 0 ? (px - mx) * ddX : (mx + 1 - px) * ddX;
-    var sdY = rdy < 0 ? (py - my) * ddY : (my + 1 - py) * ddY;
-    var hit = 0, step = 0, wallDist = 99;
-    while (!hit && step < 32) {
+    var sdX = rdx < 0 ? (px-mx)*ddX : (mx+1-px)*ddX;
+    var sdY = rdy < 0 ? (py-my)*ddY : (my+1-py)*ddY;
+    var wallHit = 0, step = 0, wallDist = 99;
+    while (!wallHit && step < 32) {
       step++;
       if (sdX < sdY) { sdX += ddX; mx += sX; }
       else            { sdY += ddY; my += sY; }
-      if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) { hit = 1; break; }
-      if (MAP_DATA[my * MAP_W + mx] > 0) { hit = 1; break; }
+      if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) { wallHit = 1; break; }
+      if (MAP_DATA[my*MAP_W+mx] > 0) { wallHit = 1; break; }
     }
     wallDist = step > 0 ? (sdX < sdY ? sdX : sdY) : 99;
 
-    // Check enemy hits
     var bestDist = 999, bestEnemy = null;
     for (var ei = 0; ei < enemies.length; ei++) {
       var enm = enemies[ei];
@@ -472,8 +500,8 @@ function tryShoot() {
       var eDist = Math.sqrt(edx*edx + edy*edy);
       var t = edx * rdx + edy * rdy;
       if (t < 0) continue;
-      var closestX = px + rdx * t, closestY = py + rdy * t;
-      var lateral = Math.sqrt((enm.x - closestX)**2 + (enm.y - closestY)**2);
+      var closestX = px + rdx*t, closestY = py + rdy*t;
+      var lateral = Math.sqrt((enm.x-closestX)**2 + (enm.y-closestY)**2);
       if (lateral < 0.4 && eDist < bestDist && eDist < wallDist) {
         bestDist = eDist;
         bestEnemy = enm;
@@ -485,10 +513,9 @@ function tryShoot() {
       bestEnemy.hitFlash = 4;
       hitSomething = true;
       if (bestEnemy.health <= 0) {
-        bestEnemy.dead = true;
-        bestEnemy.deadT = 0;
-        bestEnemy.state = S.DEAD;
+        bestEnemy.dead = true; bestEnemy.deadT = 0; bestEnemy.state = S.DEAD;
         player.kills++;
+        ZeppOS.vibrate('VIBRATOR_SCENE_NOTIFICATION');
       }
     }
   }
@@ -496,68 +523,104 @@ function tryShoot() {
 }
 
 // ---- Colors ----
-var WALL_COLORS  = ['#404040','#808080','#661111','#116611','#112255','#CC8822'];
-var FLOOR_COLORS = ['#1108','#2211','#2211','#1142','#2211','#2211'];
+var WALL_COLORS   = ['#404040','#808080','#661111','#116611','#112255','#CC8822'];
+var FLOOR_COLORS  = ['#1108','#2211','#2211','#1142','#2211','#2211'];
 var SKY_NEAR = '#0D0D20', SKY_FAR = '#1A1828';
 
-function wallColor(t) { return WALL_COLORS[(t-1) % WALL_COLORS.length] || '#404040'; }
+function wallColor(t)  { return WALL_COLORS[(t-1) % WALL_COLORS.length] || '#404040'; }
 function floorColor(t) { return '#' + (FLOOR_COLORS[t % FLOOR_COLORS.length] || '1108'); }
 
 function shadeHex(hex, dist, dim) {
   var fog = Math.min(0.95, 1.3 / Math.sqrt(dist + 1.0));
   var d = fog * (dim !== undefined ? dim : 1.0);
-  var r = parseInt(hex.slice(0,2), 16);
-  var g = parseInt(hex.slice(2,4), 16);
-  var b = parseInt(hex.slice(4,6), 16);
-  return 'rgb(' + (r*d|0) + ',' + (g*d|0) + ',' + (b*d|0) + ')';
+  return 'rgb(' + ((parseInt(hex.slice(0,2),16)*d)|0) + ',' +
+                 ((parseInt(hex.slice(2,4),16)*d)|0) + ',' +
+                 ((parseInt(hex.slice(4,6),16)*d)|0) + ')';
 }
 
 // ---- Update ----
-var MOVE_SPD = 0.07, TURN_SPD = 0.09;
-var moving = false;
+var MOVE_SPD = 0.06, TURN_SPD = 0.08;
+var keys = {};
+window.addEventListener('keydown', function(e) {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'Digit1') currentWeapon = 0;
+  if (e.code === 'Digit2') currentWeapon = 1;
+  if (e.code === 'Digit3') currentWeapon = 2;
+  if (e.code === 'KeyE') spawnEnemyNearby();
+});
+window.addEventListener('keyup', function(e) { keys[e.code] = false; });
 
 function update() {
   if (weaponCooldown > 0) weaponCooldown--;
   if (muzzleFlash > 0) muzzleFlash--;
   if (damageFlash > 0) damageFlash--;
   if (hitMarker > 0) hitMarker--;
-  if (weaponKick > 0) weaponKick *= 0.8;
+  weaponKickAngle *= 0.8;
 
   // Weapon bob
-  if (moving) {
-    weaponBob += 0.12;
-    weaponBobY = Math.sin(weaponBob) * 3;
-  } else {
-    weaponBobY *= 0.85;
-  }
+  if (moving) { weaponBob += 0.12; weaponBobY = Math.sin(weaponBob) * 3; }
+  else weaponBobY *= 0.85;
 
-  if (autoDemo) {
-    var spd = 0.04;
-    var nx = player.x + fcos(player.angle) * spd;
-    var ny = player.y + fsin(player.angle) * spd;
-    if (canMove(nx, ny)) { player.x = nx; player.y = ny; moving = true; }
+  // Tilt-based movement (from accelerometer)
+  var accel = ZeppOS.getAccelData();
+  var tiltTurn   = accel.x * tiltTurnGain;
+  var tiltForward = -accel.y * tiltMoveGain;
+
+  // Keyboard overrides
+  var kTurn = 0, kFwd = 0;
+  if (keys['ArrowLeft']  || keys['KeyA']) kTurn -= TURN_SPD;
+  if (keys['ArrowRight'] || keys['KeyD']) kTurn += TURN_SPD;
+  if (keys['ArrowUp']    || keys['KeyW']) kFwd += MOVE_SPD;
+  if (keys['ArrowDown']  || keys['KeyS']) kFwd -= MOVE_SPD;
+  if (keys['Space']) tryShoot();
+
+  var totalTurn = tiltTurn + kTurn;
+  var totalFwd  = tiltForward + kFwd;
+
+  player.angle += totalTurn;
+  player.angle = ((player.angle % TAU) + TAU) % TAU;
+
+  if (Math.abs(totalFwd) > 0.001) {
+    var dx = fcos(player.angle) * totalFwd;
+    var dy = fsin(player.angle) * totalFwd;
+    if (canMove(player.x + dx, player.y + dy)) { player.x += dx; player.y += dy; moving = true; }
     else moving = false;
-    if (Math.random() < 0.04) player.angle += (Math.random() - 0.5) * 0.5;
   } else {
-    if (keys['ArrowLeft']  || keys['KeyA']) player.angle -= TURN_SPD;
-    if (keys['ArrowRight'] || keys['KeyD']) player.angle += TURN_SPD;
-    var dx2 = fcos(player.angle) * MOVE_SPD;
-    var dy2 = fsin(player.angle) * MOVE_SPD;
-    var nx2, ny2;
-    if (keys['ArrowUp']   || keys['KeyW']) { nx2 = player.x+dx2; ny2 = player.y+dy2; moving = true; }
-    else if (keys['ArrowDown'] || keys['KeyS']) { nx2 = player.x-dx2; ny2 = player.y-dy2; moving = true; }
-    else moving = false;
-    if (nx2 !== undefined && canMove(nx2, ny2)) { player.x = nx2; player.y = ny2; }
-    if (keys['Space']) tryShoot();
-    player.angle = ((player.angle % TAU) + TAU) % TAU;
+    moving = false;
   }
 
   for (var ei = 0; ei < enemies.length; ei++) updateEnemy(enemies[ei]);
 }
 
+// ---- Sprite drawing ----
+function drawSprite(sprite, sx, sy, sw, sh, fog) {
+  var rows = sprite.length, cols = sprite[0].length;
+  for (var r = 0; r < rows; r++) {
+    var py = (sy + r * sh / rows) | 0;
+    if (py < CEIL_BOT || py >= H) continue;
+    var nextPy = (sy + (r+1) * sh / rows) | 0;
+    var rowH = nextPy - py;
+    for (var c = 0; c < cols; c++) {
+      var color = sprite[r][c];
+      if (!color) continue;
+      var px2 = (sx + c * sw / cols) | 0;
+      if (px2 < 0 || px2 >= W) continue;
+      var nextPx = (sx + (c+1) * sw / cols) | 0;
+      var colW = nextPx - px2;
+      var cr = parseInt(color.slice(1,3), 16);
+      var cg = parseInt(color.slice(3,5), 16);
+      var cb = parseInt(color.slice(5,7), 16);
+      ctx.fillStyle = 'rgb(' + Math.min(255,cr*fog)|0 + ',' + Math.min(255,cg*fog)|0 + ',' + Math.min(255,cb*fog)|0 + ')';
+      ctx.fillRect(px2, py, colW + 1, rowH + 1);
+    }
+  }
+}
+
 // ---- Render ----
+var ctx;
 function render() {
-  var angle = player.angle + (weaponKick * (Math.random() - 0.5));
+  var angle = player.angle;
   var px = player.x, py = player.y;
   var leftAngle  = angle - HALF_FOV;
   var rightAngle = angle + HALF_FOV;
@@ -571,18 +634,16 @@ function render() {
   ctx.fillStyle = skyGrad;
   ctx.fillRect(0, 0, W, CEIL_BOT);
 
-  // Ceiling strips
+  // Ceiling
   for (var ci = 0; ci < NUM_CEIL; ci++) {
     var distC = stripDistCeil[ci];
-    var lcx = px + fldx * distC, lcy = py + fldy * distC;
-    var rcx = px + lrdx * distC, rcy = py + lrdy * distC;
     var fogC = Math.min(0.95, 1.3 / Math.sqrt(distC + 1.0));
     var skyT = Math.min(1.0, distC / 20.0);
     var rN = parseInt(SKY_NEAR.slice(0,2),16), gN = parseInt(SKY_NEAR.slice(2,4),16), bN = parseInt(SKY_NEAR.slice(4,6),16);
     var rF = parseInt(SKY_FAR.slice(0,2),16),  gF = parseInt(SKY_FAR.slice(2,4),16),  bF = parseInt(SKY_FAR.slice(4,6),16);
-    var sr = (rN + (rF-rN)*skyT)*fogC|0, sg = (gN + (gF-gN)*skyT)*fogC|0, sb = (bN + (bF-bN)*skyT)*fogC|0;
+    var sr = (rN+(rF-rN)*skyT)*fogC|0, sg = (gN+(gF-gN)*skyT)*fogC|0, sb = (bN+(bF-bN)*skyT)*fogC|0;
     var yC = (ci * CEIL_BOT / NUM_CEIL) | 0;
-    var nextYC = ((ci + 1) * CEIL_BOT / NUM_CEIL) | 0;
+    var nextYC = ((ci+1) * CEIL_BOT / NUM_CEIL) | 0;
     ctx.fillStyle = 'rgb(' + sr + ',' + sg + ',' + sb + ')';
     ctx.fillRect(0, yC, W, nextYC - yC + 1);
   }
@@ -595,8 +656,7 @@ function render() {
     var rayAngle = startAngle + ri * (FOV / NUM_RAYS);
     var ray = castRay(px, py, rayAngle);
     zBuf[ri] = ray.dist;
-    var wallH = (WALL_ZONE_H / ray.dist) | 0;
-    if (wallH > WALL_ZONE_H) wallH = WALL_ZONE_H;
+    var wallH = Math.min(WALL_ZONE_H, (WALL_ZONE_H / ray.dist) | 0) | 0;
     if (wallH < 1) wallH = 1;
     var wallY = CEIL_BOT + ((WALL_ZONE_H - wallH) >> 1);
     var x = (ri * colW) | 0;
@@ -605,7 +665,7 @@ function render() {
     ctx.fillRect(x, wallY, colW + 1, wallH);
   }
 
-  // Floor strips
+  // Floor
   for (var fi = 0; fi < NUM_FLR; fi++) {
     var distF = stripDistFloor[fi];
     var lfx = px + fldx * distF, lfy = py + fldy * distF;
@@ -614,194 +674,322 @@ function render() {
     var fmx = cfmx | 0, fmy = cfmy | 0;
     var floorType = 0;
     if (fmx >= 0 && fmx < MAP_W && fmy >= 0 && fmy < MAP_H)
-      floorType = FLOOR_DATA[fmy * MAP_W + fmx] || 0;
+      floorType = FLOOR_DATA[fmy*MAP_W+fmx] || 0;
     var yF = (WALL_BOT + fi * (H - WALL_BOT) / NUM_FLR) | 0;
-    var nextYF = (WALL_BOT + (fi + 1) * (H - WALL_BOT) / NUM_FLR) | 0;
+    var nextYF = (WALL_BOT + (fi+1) * (H - WALL_BOT) / NUM_FLR) | 0;
     ctx.fillStyle = shadeHex(floorColor(floorType), distF, 1.0);
     ctx.fillRect(0, yF, W, nextYF - yF + 1);
   }
 
-  // ---- Enemy sprites ----
+  // Enemy sprites
   for (var ei = 0; ei < enemies.length; ei++) {
     var e = enemies[ei];
     var edx = e.x - px, edy = e.y - py;
     var eDist = Math.sqrt(edx*edx + edy*edy);
     if (eDist < 0.3) continue;
-
     var angleToE = Math.atan2(edy, edx);
     var relAngle = angleToE - angle;
     while (relAngle > Math.PI) relAngle -= Math.PI * 2;
     while (relAngle < -Math.PI) relAngle += Math.PI * 2;
     if (Math.abs(relAngle) > HALF_FOV + 0.2) continue;
-
-    var screenX = W / 2 + (relAngle / HALF_FOV) * (W / 2);
-    var spriteH = (H * 2.0 / eDist) | 0;
+    var screenX = W/2 + (relAngle / HALF_FOV) * (W/2);
+    var spriteH = (H * 2.2 / eDist) | 0;
     var spriteW = spriteH * 0.8 | 0;
-    var spriteY = (H / 2) - (spriteH / 2);
-
-    var zIdx = Math.max(0, Math.min(NUM_RAYS-1, ((screenX / W) * NUM_RAYS) | 0));
+    var spriteY = (H/2) - (spriteH/2);
+    var zIdx = Math.max(0, Math.min(NUM_RAYS-1, ((screenX/W)*NUM_RAYS) | 0));
     var wallDist = zBuf[zIdx];
     if (eDist > wallDist + 0.3) continue;
-
     var fog = Math.min(0.99, 4.0 / (eDist + 0.3));
-    var sprite;
-    if (e.dead) {
-      sprite = SPR_DEAD_DEC;
-    } else if (e.hitFlash > 0) {
-      // Hit flash: white sprite
-      sprite = decodeSprite(SPR_IMP.map(function(r) { return r.replace(/[1-4]/g, '4'); }));
-    } else {
-      sprite = SPR_IMP_DEC;
-    }
-    drawSprite(sprite, screenX - spriteW / 2, spriteY, spriteW, spriteH, fog);
+    var sprite = e.dead ? SPR_DEAD_DEC :
+      (e.hitFlash > 0 ? decodeSprite(SPR_IMP.map(function(r) { return r.replace(/[1-4]/g,'4'); })) : SPR_IMP_DEC);
+    drawSprite(sprite, screenX - spriteW/2, spriteY, spriteW, spriteH, fog);
   }
 
-  // ---- Crosshair ----
-  var crossColor = hitMarker > 0 ? '#ff4444' : '#cccccc';
-  ctx.strokeStyle = crossColor;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(W/2 - 8, H/2); ctx.lineTo(W/2 + 8, H/2);
-  ctx.moveTo(W/2, H/2 - 8); ctx.lineTo(W/2, H/2 + 8);
-  ctx.stroke();
-  // Small center dot
-  ctx.fillStyle = crossColor;
-  ctx.beginPath();
-  ctx.arc(W/2, H/2, 2, 0, Math.PI * 2);
-  ctx.fill();
+  // ================================================================
+  // IN-CANVAS HUD — designed for 390x450 Bip 6 display
+  // Top and bottom safe zones (accounting for rounded corners)
+  // ================================================================
+  var PAD = 8;
 
-  // ---- Weapon (bottom center) ----
-  var wx = W / 2 - 30;
-  var wy = H - 45 + weaponBobY;
+  // --- TOP BAR ---
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, 24);
 
-  // Shotgun barrel shape (wider)
-  var isShotgun = currentWeapon === 1;
-  ctx.fillStyle = '#404040';
-  if (isShotgun) {
-    ctx.fillRect(wx - 8, wy + 5, 76, 12);
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(wx - 8, wy + 5, 76, 4);
-    // Stock
-    ctx.fillStyle = '#2a1a0a';
-    ctx.fillRect(wx - 8, wy + 10, 18, 20);
+  ctx.font = '9px monospace';
+  ctx.textBaseline = 'top';
+
+  // FPS (left)
+  ctx.fillStyle = '#444';
+  ctx.fillText('FPS:' + FPS, PAD, 7);
+
+  // Compass (center)
+  var dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  var dirIdx = (((player.angle + Math.PI/8) / (Math.PI/4)) | 0) % 8;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#666';
+  ctx.fillText(dirs[dirIdx], W/2, 7);
+  ctx.textAlign = 'left';
+
+  // Tilt indicator (right)
+  if (ZeppOS.accelEnabled) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#2a6a2a';
+    ctx.fillText('TILT ON', W - PAD, 7);
+    ctx.textAlign = 'left';
   } else {
-    // Pistol/chaingun
-    ctx.fillRect(wx, wy + 5, 60, 10);
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(wx, wy + 5, 60, 3);
-    ctx.fillStyle = '#2a1a0a';
-    ctx.fillRect(wx + 50, wy - 2, 12, 18);
-  }
-  // Barrel tip
-  ctx.fillStyle = '#303030';
-  if (isShotgun) ctx.fillRect(wx + 68, wy + 7, 8, 8);
-  else ctx.fillRect(wx + 60, wy + 7, 6, 6);
-
-  // Muzzle flash
-  if (muzzleFlash > 0) {
-    var flashSize = 15 + (muzzleFlash * 2);
-    ctx.fillStyle = 'rgba(255, 200, 50, 0.9)';
-    ctx.beginPath();
-    ctx.arc(W/2, wy - 5, flashSize, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255, 255, 220, 1.0)';
-    ctx.beginPath();
-    ctx.arc(W/2, wy - 5, flashSize * 0.4, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#333';
+    ctx.fillText('KB MODE', W - PAD, 7);
+    ctx.textAlign = 'left';
   }
 
-  // ---- Damage flash overlay ----
+  // --- BOTTOM HUD STRIP ---
+  var hudY = H - 46;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, hudY - 4, W, H - hudY + 4);
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, hudY - 4); ctx.lineTo(W, hudY - 4);
+  ctx.stroke();
+
+  // ---- 3-SEGMENT BOTTOM HUD ----
+  var segW = W / 3;
+
+  // SEGMENT 1: HP + Armor (left)
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 9px monospace';
+  var hp = Math.max(0, player.health);
+  var hpCol = hp > 50 ? '#44ee44' : hp > 25 ? '#ffaa00' : '#ff2222';
+  ctx.fillStyle = '#555'; ctx.fillText('HP', PAD, hudY + 3);
+  ctx.fillStyle = hpCol;
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText(hp, PAD + 18, hudY);
+
+  // Armor
+  ctx.font = 'bold 9px monospace';
+  ctx.fillStyle = '#446688'; ctx.fillText('AR', PAD, hudY + 17);
+  ctx.fillStyle = player.armor > 0 ? '#4488ff' : '#2a2a2a';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText(player.armor, PAD + 18, hudY + 14);
+
+  // SEGMENT 2: Ammo (center)
+  var wp = WEAPONS[currentWeapon];
+  var ammo = AMMO[wp.ammoType];
+  var maxA = wp.ammoMax || MAX_AMMO[wp.ammoType];
+  var ammoPct = ammo / maxA;
+  var ammoCol = ammoPct > 0.4 ? '#ffdd44' : ammoPct > 0.2 ? '#ffaa00' : '#ff2222';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 9px monospace';
+  ctx.fillStyle = '#666'; ctx.fillText('AMMO', W/2, hudY + 3);
+  ctx.fillStyle = ammoCol;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(ammo, W/2, hudY);
+  // Ammo bar
+  var barW = 50, barH = 5;
+  var barX = W/2 - barW/2;
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(barX, hudY + 19, barW, barH);
+  ctx.fillStyle = ammoCol;
+  ctx.fillRect(barX, hudY + 19, (barW * ammoPct) | 0, barH);
+
+  // SEGMENT 3: Weapon + Kills (right)
+  ctx.textAlign = 'right';
+  var wepNames  = ['PST', 'SHT', 'CHG'];
+  var wepColors = ['#dddddd', '#ffaa44', '#ff6644'];
+  ctx.font = 'bold 9px monospace';
+  ctx.fillStyle = wepColors[currentWeapon];
+  ctx.fillText(wepNames[currentWeapon], W - PAD, hudY + 3);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = '#333';
+  ctx.fillText('K:' + player.kills, W - PAD, hudY);
+
+  // Damage flash overlay
   if (damageFlash > 0) {
-    ctx.fillStyle = 'rgba(255, 0, 0, ' + (damageFlash * 0.04) + ')';
+    ctx.fillStyle = 'rgba(255, 0, 0, ' + (damageFlash * 0.035) + ')';
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ---- Key icons (top right) ----
-  var kx = W - 30, ky = 12;
-  var keyColors = [
-    { id: 'red', col: '#ff4444', has: keys_collected.red },
-    { id: 'blue', col: '#4488ff', has: keys_collected.blue },
-    { id: 'yellow', col: '#ffdd00', has: keys_collected.yellow }
-  ];
-  for (var ki = 0; ki < keyColors.length; ki++) {
-    var k = keyColors[ki];
-    ctx.fillStyle = k.has ? k.col : '#333333';
-    ctx.beginPath();
-    ctx.arc(kx - ki * 16, ky, 5, 0, Math.PI * 2);
-    ctx.fill();
-    if (k.has) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+  // --- CROSSHAIR ---
+  var crossColor = hitMarker > 0 ? '#ff4444' : 'rgba(200,200,200,0.7)';
+  ctx.strokeStyle = crossColor;
+  ctx.lineWidth = hitMarker > 0 ? 2 : 1;
+  ctx.beginPath();
+  ctx.moveTo(W/2 - 7, H/2); ctx.lineTo(W/2 + 7, H/2);
+  ctx.moveTo(W/2, H/2 - 7); ctx.lineTo(W/2, H/2 + 7);
+  ctx.stroke();
+  ctx.fillStyle = crossColor;
+  ctx.beginPath();
+  ctx.arc(W/2, H/2, hitMarker > 0 ? 2.5 : 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // --- FIRST-PERSON WEAPON ---
+  // Gun fills bottom-center of view, barrel pointing up toward horizon
+  var wx = W / 2;
+  var wy = H - 8 + weaponBobY;
+  var isShotgun  = currentWeapon === 1;
+  var isChaingun = currentWeapon === 2;
+  // Gun dimensions grow UPWARD from wy
+  var gunW = isShotgun ? 96 : isChaingun ? 76 : 66;
+  var gunH = isShotgun ? 95 : isChaingun ? 90 : 82;
+  var gx = wx - gunW / 2;
+  var gy = wy - gunH;  // top of gun
+
+  // ---- PISTOL ----
+  if (!isShotgun && !isChaingun) {
+    // Slide / barrel (top section, pointing toward horizon)
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(gx + 16, gy + 4, 38, 12);
+    // Slide serrations
+    ctx.fillStyle = '#2a2a2a';
+    for (var si = 0; si < 5; si++) {
+      ctx.fillRect(gx + 20 + si * 7, gy + 6, 3, 8);
     }
+    // Frame
+    ctx.fillStyle = '#505050';
+    ctx.fillRect(gx + 14, gy + 14, 24, 20);
+    // Barrel hole
+    ctx.fillStyle = '#111';
+    ctx.fillRect(gx + 52, gy + 8, 8, 6);
+    // Grip
+    ctx.fillStyle = '#261508';
+    ctx.fillRect(gx + 14, gy + 30, 18, 36);
+    // Grip texture
+    ctx.fillStyle = '#1a0f05';
+    ctx.fillRect(gx + 16, gy + 32, 2, 32);
+    ctx.fillRect(gx + 20, gy + 32, 2, 32);
+    ctx.fillRect(gx + 24, gy + 32, 2, 32);
+    // Trigger guard
+    ctx.fillStyle = '#333';
+    ctx.fillRect(gx + 18, gy + 24, 14, 10);
+    // Trigger
+    ctx.fillStyle = '#555';
+    ctx.fillRect(gx + 23, gy + 26, 3, 6);
+    // Rear sight
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(gx + 14, gy + 2, 6, 4);
+  }
+
+  // ---- SHOTGUN ----
+  else if (isShotgun) {
+    // Barrel (long, top)
+    ctx.fillStyle = '#383838';
+    ctx.fillRect(gx + 22, gy + 4, 66, 14);
+    // Barrel ribs
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(gx + 24, gy + 6, 62, 3);
+    ctx.fillRect(gx + 24, gy + 12, 62, 3);
+    // Receiver
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(gx + 14, gy + 14, 32, 26);
+    // Ejection port
+    ctx.fillStyle = '#222';
+    ctx.fillRect(gx + 18, gy + 18, 12, 6);
+    // Barrel bands
+    ctx.fillStyle = '#666';
+    ctx.fillRect(gx + 22, gy + 4, 4, 14);
+    ctx.fillRect(gx + 60, gy + 4, 4, 14);
+    // Stock (grip on left, extends DOWN from receiver)
+    ctx.fillStyle = '#2a1505';
+    ctx.fillRect(gx, gy + 18, 18, 44);
+    // Stock checkering
+    ctx.fillStyle = '#1a0d03';
+    for (var sj = 0; sj < 6; sj++) {
+      ctx.fillRect(gx + 2, gy + 22 + sj * 6, 14, 2);
+    }
+    // Pump grip
+    ctx.fillStyle = '#1f1205';
+    ctx.fillRect(gx + 40, gy + 36, 22, 14);
+    // Barrel end
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(gx + 84, gy + 5, 10, 12);
+  }
+
+  // ---- CHAINGUN ----
+  else if (isChaingun) {
+    // Twin barrels (top)
+    ctx.fillStyle = '#333';
+    ctx.fillRect(gx + 8, gy + 2, 56, 9);
+    ctx.fillRect(gx + 8, gy + 14, 56, 9);
+    // Barrel housing
+    ctx.fillStyle = '#4a4a4a';
+    ctx.fillRect(gx + 4, gy + 4, 10, 22);
+    // Motor housing
+    ctx.fillStyle = '#555';
+    ctx.fillRect(gx + 62, gy, 16, 28);
+    // Motor ridges
+    ctx.fillStyle = '#333';
+    for (var mi = 0; mi < 4; mi++) {
+      ctx.fillRect(gx + 64 + mi * 3, gy + 2, 2, 24);
+    }
+    // Ammo box (below barrels)
+    ctx.fillStyle = '#2a2010';
+    ctx.fillRect(gx + 16, gy + 30, 36, 20);
+    // Ammo visible in box
+    ctx.fillStyle = '#554422';
+    for (var ai = 0; ai < 5; ai++) {
+      ctx.fillRect(gx + 18 + ai * 7, gy + 32, 5, 16);
+    }
+    // Barrel end
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(gx + 62, gy + 5, 8, 16);
+    // Cooling holes
+    ctx.fillStyle = '#222';
+    ctx.fillRect(gx + 20, gy + 4, 4, 8);
+    ctx.fillRect(gx + 28, gy + 4, 4, 8);
+    ctx.fillRect(gx + 36, gy + 4, 4, 8);
+    ctx.fillRect(gx + 44, gy + 4, 4, 8);
+  }
+
+  // Muzzle flash
+  if (muzzleFlash > 0) {
+    var flashX = wx;
+    var flashY = gy + 10;
+    var flashR = muzzleFlash * 3;
+    ctx.fillStyle = 'rgba(255, 190, 40, 0.9)';
+    ctx.beginPath();
+    ctx.arc(flashX, flashY, flashR + 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 200, 1.0)';
+    ctx.beginPath();
+    ctx.arc(flashX, flashY, flashR * 0.4, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
-// ---- HUD update ----
-function updateHUD() {
-  document.getElementById('h-health').textContent = Math.max(0, player.health);
-  document.getElementById('h-armor').textContent = player.armor;
-  var wp = WEAPONS[currentWeapon];
-  var ammo = AMMO[wp.ammoType];
-  document.getElementById('h-ammo').textContent = ammo;
-  document.getElementById('h-weapon').textContent = wp.name;
-  document.getElementById('h-kills').textContent = player.kills;
-  document.getElementById('bar-health').style.width = Math.max(0, player.health) + '%';
-  document.getElementById('bar-armor').style.width = Math.min(100, player.armor) + '%';
-  var maxA = wp.ammoMax || MAX_AMMO[wp.ammoType];
-  document.getElementById('bar-ammo').style.width = Math.min(100, (ammo / maxA) * 100) + '%';
-  document.getElementById('fps').textContent = 'FPS:' + fps;
-}
+// ---- Main loop ----
+var canvas = document.getElementById('c');
+canvas.width  = W;
+canvas.height = H;
+ctx = canvas.getContext('2d');
 
-// ---- Game loop ----
+var lastTs = 0;
 function loop(ts) {
   if (!running) return;
+  if (ts - lastFpsTime >= 1000) {
+    FPS = frameCount;
+    frameCount = 0;
+    lastFpsTime = ts;
+  }
+  frameCount++;
   update();
   try { render(); } catch(e) { console.error('Render:', e.message); }
-  updateHUD();
-  frameCount++;
-  if (ts - lastTime >= 1000) { fps = frameCount; frameCount = 0; lastTime = ts; }
   setTimeout(function() { loop(performance.now()); }, 50);
 }
 
-// ---- Input ----
-window.addEventListener('keydown', function(e) {
-  keys[e.code] = true;
-  if (e.code === 'Space') e.preventDefault();
-  if (e.code === 'Escape') autoDemo = false;
-  // Weapon switching
-  if (e.code === 'Digit1') currentWeapon = 0;
-  if (e.code === 'Digit2') currentWeapon = 1;
-  if (e.code === 'Digit3') currentWeapon = 2;
-  // Spawn enemy
-  if (e.code === 'KeyE') {
-    var a = player.angle + Math.PI + (Math.random() - 0.5) * 1.5;
-    var d = 2 + Math.random() * 2;
-    spawnEnemy(
-      Math.max(1, Math.min(MAP_W - 2, player.x + Math.cos(a) * d)),
-      Math.max(1, Math.min(MAP_H - 2, player.y + Math.sin(a) * d))
-    );
+// ---- Boot ----
+ZeppOS.init();
+ZeppOS.onGesture(function(gesture) {
+  if (gesture === 'DOUBLE_TAP') {
+    tryShoot();
+  } else if (gesture === 'GESTURE_LEFT') {
+    currentWeapon = (currentWeapon - 1 + WEAPONS.length) % WEAPONS.length;
+  } else if (gesture === 'GESTURE_RIGHT') {
+    currentWeapon = (currentWeapon + 1) % WEAPONS.length;
   }
 });
-window.addEventListener('keyup', function(e) { keys[e.code] = false; });
-
-canvas = document.getElementById('c');
-ctx = canvas.getContext('2d');
-
-canvas.addEventListener('mousedown', function(e) {
-  isDragging = true; lastX = e.clientX;
-});
-canvas.addEventListener('mousemove', function(e) {
-  if (!isDragging) return;
-  player.angle += (e.clientX - lastX) * 0.005;
-  lastX = e.clientX;
-});
-canvas.addEventListener('mouseup',   function() { isDragging = false; });
-canvas.addEventListener('mouseleave', function() { isDragging = false; });
-
-// ---- Start ----
-running = true;
-lastTime = performance.now();
+ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_MIDDLE');
+lastFpsTime = performance.now();
 loop(performance.now());
 </script>
 </body>
