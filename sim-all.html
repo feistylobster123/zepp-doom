@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zepp DOOM — Three Approaches</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a0a; display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;overflow:hidden; }
+  canvas { border-radius:12px;box-shadow:0 0 80px rgba(0,0,0,1);display:block;image-rendering:pixelated; }
+  .controls { color:#555;font-size:10px;margin-top:8px;text-align:center;font-family:monospace; }
+  .tabs { display:flex;gap:4px;margin-bottom:8px; }
+  .tab { background:#1a1a1a;color:#777;border:1px solid #333;padding:5px 14px;cursor:pointer;font-family:monospace;font-size:11px;border-radius:4px; }
+  .tab.active { background:#2a2a2a;color:#fff;border-color:#555; }
+  .tab:hover { background:#222; }
+</style>
+</head>
+<body>
+<div class="tabs">
+  <button class="tab active" id="tab1" onclick="setApproach(1)">Approach 1: Raycaster</button>
+  <button class="tab" id="tab2" onclick="setApproach(2)">Approach 2: Sprites</button>
+  <button class="tab" id="tab3" onclick="setApproach(3)">Approach 3: Roguelike</button>
+</div>
+<canvas id="c" width="480" height="480"></canvas>
+<div class="controls">
+  Click canvas = MENU button (cycles: FWD→SL→SR→TL→TR) | Auto-demo runs on FWD mode
+</div>
+<script>
+'use strict';
+// ================================================================
+// Zepp DOOM — Unified Simulator
+// Renders three different approaches to the same 480x480 canvas
+// Each approach mirrors what the Zepp widget pool would do
+// ================================================================
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = 480, H = 480;
+
+// ================================================================
+// SHARED MATH / UTILS
+// ================================================================
+const TAU = Math.PI * 2;
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ================================================================
+// WIDGET MOCK — tracks FILL_RECT and TEXT widgets, renders to canvas
+// ================================================================
+class WidgetRegistry {
+  constructor() { this.widgets = []; }
+  create(type, opts) {
+    const w = { type, opts: {...opts}, id: this.widgets.length };
+    this.widgets.push(w); return w;
+  }
+  clear() { this.widgets = []; }
+  render() {
+    for (const w of this.widgets) {
+      if (w.type === 'FILL_RECT') {
+        const { x=0, y=0, w:ww=10, h:hh=10, color=0 } = w.opts;
+        const [r,g,b] = rgb565(color);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x, y, ww, hh);
+      } else if (w.type === 'TEXT') {
+        const { x=0, y=0, text='', text_size=12, align='left', color=0xFFFFFF } = w.opts;
+        const [r,g,b] = rgb565(color);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.font = `${text_size}px monospace`;
+        ctx.textAlign = align;
+        ctx.textBaseline = 'top';
+        if (align === 'center') ctx.fillText(text, x + 120, y);
+        else if (align === 'right') ctx.fillText(text, x + 240, y);
+        else ctx.fillText(text, x, y);
+      }
+    }
+  }
+}
+
+function rgb565(c) {
+  const r = (((c >> 11) & 0x1F) * 255 / 31) | 0;
+  const g = (((c >> 6)  & 0x1F) * 255 / 31) | 0;
+  const b = (((c >> 1)  & 0x1F) * 255 / 31) | 0;
+  return [r,g,b];
+}
+
+function rgb565s(c) { const [r,g,b] = rgb565(c); return `rgb(${r},${g},${b})`; }
+
+// Mock hmUI
+const hmUI = {
+  widget: { FILL_RECT:'FILL_RECT', TEXT:'TEXT' },
+  prop:   { X:'X', Y:'Y', W:'W', H:'H', COLOR:'COLOR', TEXT:'TEXT', FILL_COLOR:'FILL_COLOR' },
+  align:  { center:'center', left:'left', right:'right' },
+  button: { MENU:'MENU' },
+  createWidget(type, opts) { return REG.create(type, opts); },
+  setLayerScrolling() {},
+  showToast({ text }) { toast = text; toastTimer = 40; },
+  onGlobalButtonDown(btn, fn) { if (btn === 'MENU') btnCallbacks.push(fn); },
+};
+
+// Timer mock
+const timer = {
+  createTimer(delay, interval, cb) { return setInterval(() => cb(Date.now()), interval); },
+  stopTimer(id) { clearInterval(id); },
+};
+
+// ================================================================
+// APPROACH 1: RAYCASTER
+// ================================================================
+const MAP_DATA = [
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,2,2,0,0,0,0,0,0,3,3,0,0,1,
+  1,0,0,2,0,0,0,0,0,0,0,3,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,4,4,4,4,0,0,0,0,0,1,
+  1,0,0,0,0,0,4,0,0,4,0,0,0,0,0,1,
+  1,0,0,0,0,0,4,0,0,4,0,0,0,0,0,1,
+  1,0,0,0,0,0,4,4,4,4,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,3,3,0,0,0,0,0,0,5,5,0,0,1,
+  1,0,0,3,0,0,0,0,0,0,0,5,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+];
+const FLOOR_DATA = [
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+  0,1,2,2,2,2,1,1,1,1,2,2,2,2,1,0,
+  0,1,2,0,0,2,1,1,1,1,0,0,0,2,1,0,
+  0,1,2,0,0,2,1,1,1,1,0,0,0,2,1,0,
+  0,1,2,2,2,2,1,1,1,1,2,2,2,2,1,0,
+  0,1,1,1,1,1,3,3,3,3,1,1,1,1,1,0,
+  0,1,1,1,1,1,3,0,0,3,1,1,1,1,1,0,
+  0,1,1,1,1,1,3,0,0,3,1,1,1,1,1,0,
+  0,1,1,1,1,1,3,3,3,3,1,1,1,1,1,0,
+  0,1,2,2,2,2,1,1,1,1,4,4,4,4,1,0,
+  0,1,2,0,0,2,1,1,1,1,4,0,0,4,1,0,
+  0,1,2,0,0,2,1,1,1,1,4,0,0,4,1,0,
+  0,1,2,2,2,2,1,1,1,1,4,4,4,4,1,0,
+  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+];
+const MAP_W = 16, MAP_H = 16;
+const WALL_COLORS = [0x404040, 0x808080, 0x661111, 0x116611, 0x112255, 0xCC8822];
+const FLOOR_COLORS = [0x111010, 0x221810, 0x332211, 0x112233, 0x223322, 0x332222];
+const CEIL_TOP  = 0x0D1020;
+const CEIL_HORIZ = 0x1A1840;
+
+const NUM_RAYS = 120;
+const FOV = Math.PI / 3;
+const HALF_FOV = FOV / 2;
+const ANGLE_STEP = FOV / NUM_RAYS;
+
+const SIN_T = new Float32Array(360), COS_T = new Float32Array(360);
+for (let i = 0; i < 360; i++) { SIN_T[i] = Math.sin(i/360*TAU); COS_T[i] = Math.cos(i/360*TAU); }
+function fsin(a) { return SIN_T[(((a%TAU+TAU)%TAU/TAU*360)|0+36000)%360]; }
+function fcos(a) { return COS_T[(((a%TAU+TAU)%TAU/TAU*360)|0+36000)%360]; }
+
+class RaycasterPage {
+  constructor() {
+    this.px = 2.5; this.py = 8.5; this.angle = 0;
+    this.ceilBot  = (H * 0.28) | 0;
+    this.wallBot  = (H * 0.75) | 0;
+    this.wallZoneH = this.wallBot - this.ceilBot;
+    this.floorH   = H - this.wallBot;
+    this.colW     = ((W / NUM_RAYS) | 0) + 1;
+    this.fps = 0; this.fc = 0; this.lastFps = Date.now();
+    this.timerId = null; this.inputMode = 0;
+    REG.clear();
+
+    // Pre-create wall columns
+    this.cols = [];
+    for (let i = 0; i < NUM_RAYS; i++) {
+      const x = (i * this.colW) | 0;
+      this.cols.push(hmUI.createWidget('FILL_RECT', { x, y: this.ceilBot, w: this.colW, h: 1, color: 0 }));
+    }
+    // Pre-create floor strips
+    this.flr = [];
+    for (let i = 0; i < 12; i++) {
+      const y = this.wallBot + (i * (this.floorH/12)) | 0;
+      const h = (i === 11) ? H - y : (this.floorH/12) | 0;
+      this.flr.push(hmUI.createWidget('FILL_RECT', { x:0, y, w:W, h, color:0 }));
+    }
+    // Pre-create ceiling strips
+    this.ceil = [];
+    for (let i = 0; i < 12; i++) {
+      const y = i * ((this.ceilBot+1)/12) | 0;
+      const h = (i === 11) ? this.ceilBot - y : ((this.ceilBot+1)/12) | 0;
+      this.ceil.push(hmUI.createWidget('FILL_RECT', { x:0, y, w:W, h, color:0 }));
+    }
+    // HUD
+    this.fpsTxt = hmUI.createWidget('TEXT', { x:4, y:4, w:80, h:18, text:'FPS:0', text_size:14, color:0xFFFF00 });
+    this.posTxt = hmUI.createWidget('TEXT', { x:320, y:4, w:156, h:18, text:'0,0', text_size:14, color:0x00FF88, align:'right' });
+    hmUI.createWidget('TEXT', { x:0, y:0, w:W, h:16, text:'APPROACH 1: RAYCASTER // 120 COLUMNS', text_size:10, color:0x888888, align:'center' });
+    hmUI.createWidget('TEXT', { x:0, y:464, w:W, h:16, text:'BTN: FWD→SL→SR→TL→TR', text_size:10, color:0x555555, align:'center' });
+  }
+
+  _castRay(px, py, angle) {
+    const rdx = fcos(angle), rdy = fsin(angle);
+    let mx = px|0, my = py|0;
+    const ddX = Math.abs(1/rdx)||1e10, ddY = Math.abs(1/rdy)||1e10;
+    let sX=rdx<0?-1:1, sY=rdy<0?-1:1;
+    let sdX=((rdx<0?px-mx:mx+1-px)*ddX)||0, sdY=((rdy<0?py-my:my+1-py)*ddY)||0;
+    let side=0, wallType=1;
+    for (let i=0;i<64;i++) {
+      if (sdX<sdY) { sdX+=ddX; mx+=sX; side=0; }
+      else { sdY+=ddY; my+=sY; side=1; }
+      if (mx<0||mx>=MAP_W||my<0||my>=MAP_H) return {d:999,wt:1,side:0};
+      const t=MAP_DATA[my*MAP_W+mx];
+      if (t>0) return {d:side===0?Math.abs((mx-px+(1-sX)/2)/rdx):Math.abs((my-py+(1-sY)/2)/rdy),wt:t,side};
+    }
+    return {d:999,wt:1,side:0};
+  }
+
+  _shade(c, dist, sideF=1) {
+    const fog=Math.min(1,1.2/Math.sqrt(dist+0.5));
+    const dim=fog*sideF;
+    const r=((c>>16)&0xFF)*dim,g=((c>>8)&0xFF)*dim,b=(c&0xFF)*dim;
+    return (((r|0)<<16)|((g|0)<<8)|(b|0))&0xFFFFFF;
+  }
+
+  tick() {
+    this.fc++;
+    const now = Date.now();
+    if (now-this.lastFps>=1000) { this.fps=this.fc; this.fc=0; this.lastFps=now; }
+
+    // Input
+    const MOVE=0.06, TURN=0.08;
+    let mf=false, ml=false, mr=false;
+    if (this.inputMode===0) mf=true;
+    if (this.inputMode===1) ml=true;
+    if (this.inputMode===2) mr=true;
+    if (this.inputMode===3) this.angle-=TURN;
+    if (this.inputMode===4) this.angle+=TURN;
+    if (this.inputMode===0&&this.fc%40<10) this.angle+=TURN;
+
+    if (mf||ml||mr) {
+      const dx=fcos(this.angle)*MOVE, dy=fsin(this.angle)*MOVE;
+      if (mf) {
+        const nx=this.px+dx, ny=this.py+dy;
+        if (!(MAP_DATA[((ny|0))*MAP_W+(nx|0)]>0)) { this.px=nx; this.py=ny; }
+      }
+      if (ml) {
+        const nx=this.px+fsin(this.angle)*0.05, ny=this.py-fcos(this.angle)*0.05;
+        if (!(MAP_DATA[((ny|0))*MAP_W+(nx|0)]>0)) { this.px=nx; this.py=ny; }
+      }
+      if (mr) {
+        const nx=this.px-fsin(this.angle)*0.05, ny=this.py+fcos(this.angle)*0.05;
+        if (!(MAP_DATA[((ny|0))*MAP_W+(nx|0)]>0)) { this.px=nx; this.py=ny; }
+      }
+    }
+
+    // Floor/ceiling — update strip colors
+    const halfW=this.wallZoneH/2;
+    for (let i=0;i<12;i++) {
+      const rowMid=(i+0.5)/12;
+      const dist=halfW/(rowMid-0.5+0.001);
+      const cfmx=this.px+(fcos(this.angle-HALF_FOV)+fcos(this.angle+HALF_FOV))*0.5*dist;
+      const cfmy=this.py+(fsin(this.angle-HALF_FOV)+fsin(this.angle+HALF_FOV))*0.5*dist;
+      const ft=FLOOR_DATA[(((cfmy|0)+MAP_H*100)%MAP_H)*MAP_W+(((cfmx|0)+MAP_W*100)%MAP_W)]||0;
+      const color=this._shade(FLOOR_COLORS[ft%6],dist);
+      this.flr[i].opts.color=color;
+    }
+    for (let i=0;i<12;i++) {
+      const dist=halfW/(0.001+((12-i-0.5)/12-0.5));
+      const skyBase=dist<8?CEIL_TOP:CEIL_HORIZ;
+      this.ceil[i].opts.color=this._shade(skyBase,dist);
+    }
+
+    // Wall columns
+    const startAngle=this.angle-HALF_FOV;
+    for (let i=0;i<NUM_RAYS;i++) {
+      const rayAngle=startAngle+i*ANGLE_STEP;
+      const {d,wt,side}=this._castRay(this.px,this.py,rayAngle);
+      let wallH=((this.wallZoneH/d)|0);
+      if (wallH>this.wallZoneH) wallH=this.wallZoneH;
+      if (wallH<1) wallH=1;
+      const wallY=this.ceilBot+(((this.wallZoneH-wallH)>>1)|0);
+      const color=this._shade(WALL_COLORS[(wt-1)%6],d,side===1?0.65:1);
+      this.cols[i].opts.y=wallY;
+      this.cols[i].opts.h=wallH;
+      this.cols[i].opts.color=color;
+    }
+
+    // HUD update
+    this.fpsTxt.opts.text=`FPS:${this.fps}`;
+    this.posTxt.opts.text=`${this.px.toFixed(1)},${this.py.toFixed(1)} ${((this.angle*180/TAU)|0)}°`;
+
+    this.timerId = setTimeout(()=>this.tick(), 100);
+  }
+
+  start() { this.tick(); }
+  stop()  { clearTimeout(this.timerId); }
+}
+
+// ================================================================
+// APPROACH 2: SPRITE-BASED PSEUDO-3D
+// ================================================================
+const SPRITE_ENEMIES = [
+  { name:'Imp',      color:0xCC4422, w:0.5, h:0.5, speed:0.025 },
+  { name:'Baron',    color:0x22AA44, w:0.6, h:0.6, speed:0.015 },
+  { name:'Cacodemon',color:0xAA2244, w:0.7, h:0.7, speed:0.01  },
+];
+
+class SpritesPage {
+  constructor() {
+    this.px = 2.5; this.py = 8.5; this.angle = 0;
+    this.fps=0; this.fc=0; this.lastFps=Date.now();
+    this.timerId=null; this.inputMode=0;
+    this.ceilBot=(H*0.28)|0; this.wallBot=(H*0.75)|0;
+    REG.clear();
+
+    // Enemies
+    this.enemies = [
+      { type:0, x:5.5, y:2.5, health:20 },
+      { type:1, x:12.5, y:4.5, health:50 },
+      { type:2, x:7.5, y:7.5, health:40 },
+      { type:0, x:2.5, y:11.5, health:20 },
+      { type:1, x:13.5, y:11.5, health:50 },
+    ];
+
+    // Sprite widget pool (20 sprites)
+    this.pool = [];
+    for (let i=0;i<20;i++) {
+      this.pool.push(hmUI.createWidget('FILL_RECT',{x:-100,y:-100,w:1,h:1,color:0}));
+    }
+
+    // Background
+    hmUI.createWidget('FILL_RECT',{x:0,y:0,w:W,h:this.ceilBot,color:0x0D1020});
+    hmUI.createWidget('FILL_RECT',{x:0,y:this.wallBot,w:W,h:H-this.wallBot,color:0x111010});
+
+    // Floor grid lines for depth cue
+    for (let i=0;i<8;i++) {
+      const y=this.wallBot+((i/8)*(H-this.wallBot))|0;
+      hmUI.createWidget('FILL_RECT',{x:0,y,w:W,h:1,color:0x1a1a1a});
+    }
+
+    this.fpsTxt=hmUI.createWidget('TEXT',{x:4,y:4,w:80,h:18,text:'FPS:0',text_size:14,color:0xFFFF00});
+    this.posTxt=hmUI.createWidget('TEXT',{x:280,y:4,w:196,h:18,text:'E:5',text_size:14,color:0x00FF88,align:'right'});
+    hmUI.createWidget('TEXT',{x:0,y:0,w:W,h:16,text:'APPROACH 2: SPRITES // PSEUDO-3D',text_size:10,color:0x888888,align:'center'});
+    hmUI.createWidget('TEXT',{x:0,y:464,w:W,h:16,text:'BTN: FWD→SL→SR→TL→TR',text_size:10,color:0x555555,align:'center'});
+  }
+
+  _proj(wx, wy) {
+    const dx=wx-this.px, dy=wy-this.py;
+    const ca=Math.cos(-this.angle), sa=Math.sin(-this.angle);
+    const rx=dx*ca-dy*sa, ry=dx*sa+dy*ca;
+    if (ry<=0.1) return null;
+    const scale=200/ry;
+    return { sx:W/2+rx*scale, sy:this.ceilBot+80/ry, scale, depth:ry };
+  }
+
+  tick() {
+    this.fc++;
+    const now=Date.now();
+    if (now-this.lastFps>=1000) { this.fps=this.fc; this.fc=0; this.lastFps=now; }
+
+    // Input
+    const MOVE=0.06, TURN=0.08;
+    if (this.inputMode===0) {
+      const nx=this.px+Math.cos(this.angle)*MOVE, ny=this.py+Math.sin(this.angle)*MOVE;
+      if (!(MAP_DATA[(ny|0)*MAP_W+(nx|0)]>0)) { this.px=nx; this.py=ny; }
+    }
+    if (this.inputMode===3) this.angle-=TURN;
+    if (this.inputMode===4) this.angle+=TURN;
+    if (this.inputMode===0&&this.fc%40<10) this.angle+=TURN;
+    if (this.inputMode===1) { this.angle-=TURN; }
+    if (this.inputMode===2) { this.angle+=TURN; }
+
+    // Update enemies (move toward player)
+    for (const e of this.enemies) {
+      const dx=this.px-e.x, dy=this.py-e.y;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      const spd=SPRITE_ENEMIES[e.type].speed;
+      if (dist>1) {
+        const nx=e.x+dx/dist*spd, ny=e.y+dy/dist*spd;
+        if (!(MAP_DATA[(ny|0)*MAP_W+(nx|0)]>0)) { e.x=nx; e.y=ny; }
+      }
+    }
+
+    // Sort enemies by depth
+    const sorted=[...this.enemies].sort((a,b)=>{
+      const da=(a.x-this.px)**2+(a.y-this.py)**2;
+      const db=(b.x-this.px)**2+(b.y-this.py)**2;
+      return db-da;
+    });
+
+    // Reset pool
+    for (const w of this.pool) { w.opts.x=-100; w.opts.y=-100; w.opts.w=0; w.opts.h=0; }
+
+    // Project and assign sprites
+    let si=0;
+    for (const e of sorted) {
+      if (si>=this.pool.length) break;
+      const proj=this._proj(e.x,e.y);
+      if (!proj) continue;
+      const type=SPRITE_ENEMIES[e.type];
+      let sw=(type.w*proj.scale*1.5)|0, sh=(type.h*proj.scale*1.5)|0;
+      if (sw<2||sh<2||sw>W||sh>H) continue;
+      const fog=Math.min(1,1.5/Math.sqrt(proj.depth));
+      const er=(type.color>>16)&0xFF,eg=(type.color>>8)&0xFF,eb=type.color&0xFF;
+      const nr=(er*fog)|0,ng=(eg*fog)|0,nb=(eb*fog)|0;
+      const color=((nr<<16)|(ng<<8)|nb);
+      const sx=((proj.sx-sw/2+W)%W)|0, sy=((proj.sy-sh*0.6))|0;
+      this.pool[si].opts.x=sx; this.pool[si].opts.y=sy;
+      this.pool[si].opts.w=sw; this.pool[si].opts.h=sh;
+      this.pool[si].opts.color=color;
+      si++;
+    }
+
+    // HUD
+    this.fpsTxt.opts.text=`FPS:${this.fps}`;
+    this.posTxt.opts.text=`E:${this.enemies.length} ${this.px.toFixed(1)},${this.py.toFixed(1)}`;
+
+    this.timerId=setTimeout(()=>this.tick(),100);
+  }
+
+  start() { this.tick(); }
+  stop()  { clearTimeout(this.timerId); }
+}
+
+// ================================================================
+// APPROACH 3: ROGUELIKE
+// ================================================================
+function rng(seed) {
+  let s=seed;
+  return ()=>{ s=(s*1664525+1013904223)>>>0; return s/0xFFFFFFFF; };
+}
+
+function generateDungeon(seed=42) {
+  const r=rng(seed);
+  const W=20,H=20;
+  const map=Array.from({length:H},()=>Array(W).fill(0));
+  for (let x=0;x<W;x++) { map[0][x]=1; map[H-1][x]=1; }
+  for (let y=0;y<H;y++) { map[y][0]=1; map[y][W-1]=1; }
+  for (let i=0;i<6;i++) {
+    const rw=(r()*4+2)|0,rh=(r()*4+2)|0;
+    const rx=(r()*(W-rw-2)+1)|0,ry=(r()*(H-rh-2)+1)|0;
+    for (let y=ry;y<ry+rh&&y<H-1;y++) for(let x=rx;x<rx+rw&&x<W-1;x++) map[y][x]=0;
+  }
+  for (let i=0;i<4;i++) {
+    const x=((r()*(W-2))+1)|0, y=((r()*(H-2))+1)|0, len=(r()*6+3)|0;
+    const horiz=r()>0.5;
+    for(let j=0;j<len;j++) {
+      const nx=horiz?x+j:x, ny=horiz?y:y+j;
+      if (nx>0&&nx<W-1&&ny>0&&ny<H-1) map[ny][nx]=0;
+    }
+  }
+  return map;
+}
+
+const TILE_COLORS = {
+  0: 0x222222, // floor
+  1: 0x404040, // wall
+  hidden: 0x080808,
+  seen: 0x111111,
+  potion: 0x22AA22,
+  ammo: 0xCCAA22,
+  enemy: 0xCC2222,
+};
+
+class RoguelikePage {
+  constructor() {
+    this.px=2.5; this.py=2.5; this.health=100; this.ammo=50; this.score=0;
+    this.dungeon=generateDungeon(99);
+    this.GW=20; this.GH=20; this.CELL=24;
+    this.VIS=5;
+    this.visible=new Set();
+    this.seen=new Set();
+    this.fps=0; this.fc=0; this.lastFps=Date.now();
+    this.timerId=null; this.inputMode=0;
+    this.moveTimer=0;
+    this.msg=''; this.msgTimer=0;
+    REG.clear();
+
+    // Tiles
+    this.tiles=[];
+    for (let y=0;y<this.GH;y++) for (let x=0;x<this.GW;x++) {
+      this.tiles.push(hmUI.createWidget('FILL_RECT',{
+        x:x*this.CELL, y:y*this.CELL, w:this.CELL, h:this.CELL, color:TILE_COLORS.hidden
+      }));
+    }
+
+    // Items
+    this.items=[];
+    const positions=[];
+    for (let y=2;y<this.GH-2;y++) for(let x=2;x<this.GW-2;x++) if(this.dungeon[y][x]===0) positions.push({x,y});
+    // Shuffle
+    for(let i=positions.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[positions[i],positions[j]]=[positions[j],positions[i]];}
+    for(let i=0;i<6&&i<positions.length;i++){
+      const type=i<3?'potion':'ammo';
+      this.items.push(hmUI.createWidget('FILL_RECT',{
+        x:positions[i].x*this.CELL+4, y:positions[i].y*this.CELL+4,
+        w:this.CELL-8, h:this.CELL-8, color:TILE_COLORS[type]
+      }));
+    }
+
+    // Enemies
+    this.enemies=[];
+    for(let i=0;i<5&&i<positions.length-6;i++){
+      const p=positions[positions.length-6-i];
+      this.enemies.push({x:p.x,y:p.y,health:30,
+        w:hmUI.createWidget('FILL_RECT',{x:p.x*this.CELL+2,y:p.y*this.CELL+2,w:this.CELL-4,h:this.CELL-4,color:TILE_COLORS.enemy})
+      });
+    }
+
+    // Player
+    this.playerW=hmUI.createWidget('FILL_RECT',{x:0,y:0,w:this.CELL,h:this.CELL,color:0x00AA00});
+
+    this.fpsTxt=hmUI.createWidget('TEXT',{x:4,y:4,w:80,h:18,text:'FPS:0',text_size:14,color:0xFFFF00});
+    this.hudTxt=hmUI.createWidget('TEXT',{x:180,y:4,w:296,h:18,text:'HP:100 AM:50 SC:0',text_size:14,color:0x00FF88,align:'right'});
+    this.msgTxt=hmUI.createWidget('TEXT',{x:0,y:230,w:W,h:20,text:'',text_size:14,color:0xFFFF00,align:'center'});
+    hmUI.createWidget('TEXT',{x:0,y:0,w:W,h:16,text:'APPROACH 3: ROGUELIKE // DUNGEON',text_size:10,color:0x888888,align:'center'});
+    hmUI.createWidget('TEXT',{x:0,y:464,w:W,h:16,text:'BTN cycles: AUTO→UP→DN→L→R',text_size:10,color:0x555555,align:'center'});
+  }
+
+  _computeVis() {
+    this.visible.clear();
+    const px=this.px|0, py=this.py|0;
+    for (let dy=-this.VIS;dy<=this.VIS;dy++) for(let dx=-this.VIS;dx<=this.VIS;dx++) {
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      if (dist>this.VIS) continue;
+      const tx=px+dx, ty=py+dy;
+      if (tx<0||tx>=this.GW||ty<0||ty>=this.GH) continue;
+      let hit=false;
+      for(let t=0.1;t<dist;t+=0.1){
+        const mx=(px+dx*t/dist)|0, my=(py+dy*t/dist)|0;
+        if(this.dungeon[my]&&this.dungeon[my][mx]===1){hit=true;break;}
+      }
+      if(!hit){this.visible.add(`${tx},${ty}`);this.seen.add(`${tx},${ty}`);}
+    }
+  }
+
+  _move(dx,dy) {
+    const nx=(this.px|0)+dx, ny=(this.py|0)+dy;
+    if (nx<0||nx>=this.GW||ny<0||ny>=this.GH) return;
+    if (this.dungeon[ny][nx]===1) return;
+    this.px=nx+0.5; this.py=ny+0.5;
+    // Collect items
+    // (simplified: items auto-collected on step — visual only)
+  }
+
+  tick() {
+    this.fc++;
+    const now=Date.now();
+    if (now-this.lastFps>=1000) { this.fps=this.fc; this.fc=0; this.lastFps=now; }
+
+    this.moveTimer++;
+    const doMove = this.inputMode===0 ? (this.moveTimer%20===0)
+                : this.inputMode===1 ? (this.moveTimer%15===0)
+                : this.inputMode===2 ? (this.moveTimer%15===0)
+                : this.inputMode===3 ? (this.moveTimer%15===0)
+                : this.inputMode===4 ? (this.moveTimer%15===0) : false;
+
+    if (doMove) {
+      if (this.inputMode===0) this._move(1,0);
+      if (this.inputMode===1) this._move(0,-1);
+      if (this.inputMode===2) this._move(0,1);
+      if (this.inputMode===3) this._move(-1,0);
+      if (this.inputMode===4) this._move(1,0);
+    }
+
+    this._computeVis();
+
+    // Render tiles
+    for (let y=0;y<this.GH;y++) for(let x=0;x<this.GW;x++) {
+      const key=`${x},${y}`;
+      const dist=Math.sqrt((x+0.5-this.px)**2+(y+0.5-this.py)**2);
+      let color;
+      if (this.visible.has(key)) {
+        color = this.dungeon[y][x]===1 ? TILE_COLORS[1] : TILE_COLORS[0];
+        const fog=Math.max(0.2,1-dist/this.VIS*0.7);
+        const r=((color>>16)&0xFF)*fog,g=((color>>8)&0xFF)*fog,b=(color&0xFF)*fog;
+        color=(((r|0)<<16)|((g|0)<<8)|(b|0));
+      } else if (this.seen.has(key)) {
+        color=TILE_COLORS.seen;
+      } else {
+        color=TILE_COLORS.hidden;
+      }
+      this.tiles[y*this.GW+x].opts.color=color;
+    }
+
+    // Enemies
+    for(const e of this.enemies) {
+      const key=`${e.x|0},${e.y|0}`;
+      const isVis=this.visible.has(key);
+      e.w.opts.color=isVis ? TILE_COLORS.enemy : TILE_COLORS.hidden;
+    }
+
+    // Player
+    this.playerW.opts.x=(this.px|0)*this.CELL+2;
+    this.playerW.opts.y=(this.py|0)*this.CELL+2;
+    this.playerW.opts.w=this.CELL-4;
+    this.playerW.opts.h=this.CELL-4;
+    this.playerW.opts.color=0x00AA00;
+
+    // HUD
+    this.fpsTxt.opts.text=`FPS:${this.fps}`;
+    this.hudTxt.opts.text=`HP:${this.health} AM:${this.ammo} SC:${this.score}`;
+
+    this.timerId=setTimeout(()=>this.tick(),100);
+  }
+
+  start() { this.tick(); }
+  stop()  { clearTimeout(this.timerId); }
+}
+
+// ================================================================
+// MAIN SIMULATOR
+// ================================================================
+let REG = new WidgetRegistry();
+let approach = 1;
+let page = null;
+let toast = '';
+let toastTimer = 0;
+let btnCallbacks = [];
+
+function setApproach(n) {
+  if (page) page.stop();
+  approach = n;
+  REG = new WidgetRegistry();
+  btnCallbacks = [];
+  if (n===1) page = new RaycasterPage();
+  else if (n===2) page = new SpritesPage();
+  else { page = new RoguelikePage(); }
+}
+
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+
+  // Clear
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,W,H);
+
+  // Render widgets
+  REG.render();
+
+  // Toast
+  if (toastTimer > 0) {
+    toastTimer--;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(W/2-60,H/2-16,120,32);
+    ctx.strokeStyle='#555'; ctx.strokeRect(W/2-60,H/2-16,120,32);
+    ctx.fillStyle='#FFFF00'; ctx.font='bold 14px monospace';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(toast, W/2, H/2);
+  }
+
+  // Approach label
+  ctx.fillStyle='#333'; ctx.font='9px monospace'; ctx.textAlign='left';
+  ctx.fillText(`approach:${approach} widgets:${REG.widgets.length}`, 4, H-4);
+}
+
+// Canvas click = MENU button
+canvas.addEventListener('click', ()=>{
+  const now=Date.now();
+  if (btnCallbacks.length) btnCallbacks.forEach(fn=>fn());
+  else {
+    // Default: cycle input mode
+    if (page&&page.inputMode!==undefined) {
+      page.inputMode=(page.inputMode+1)%5;
+      const names=page.inputMode===0?['FWD','SL','SR','TL','TR']:['AUTO','UP','DN','L','R'];
+      toast=names[page.inputMode%5]; toastTimer=40;
+    }
+  }
+});
+
+// Start
+setApproach(1);
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

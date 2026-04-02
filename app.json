@@ -21,28 +21,6 @@
     }
   },
   "targets": {
-    "bip-6": {
-      "module": {
-        "page": {
-          "pages": ["page/doom/index"]
-        }
-      },
-      "platforms": [
-        {
-          "name": "bip-6",
-          "deviceSource": 9765120
-        },
-        {
-          "name": "bip-6-2",
-          "deviceSource": 9765121
-        },
-        {
-          "name": "bip-6-3",
-          "deviceSource": 10158337
-        }
-      ],
-      "designWidth": 390
-    },
     "gtr3-pro": {
       "module": {
         "page": {
@@ -59,43 +37,12 @@
           "deviceSource": 230
         }
       ],
-      "designWidth": 480
-    },
-    "gtr3": {
+      "designWidth": 480,
       "module": {
         "page": {
-          "pages": ["page/doom/index"]
+          "pages": ["page/raycaster/index"]
         }
-      },
-      "platforms": [
-        {
-          "name": "gtr3",
-          "deviceSource": 226
-        },
-        {
-          "name": "gtr3-w",
-          "deviceSource": 227
-        }
-      ],
-      "designWidth": 454
-    },
-    "gts4": {
-      "module": {
-        "page": {
-          "pages": ["page/doom/index"]
-        }
-      },
-      "platforms": [
-        {
-          "name": "gts4",
-          "deviceSource": 7995648
-        },
-        {
-          "name": "gts4-w",
-          "deviceSource": 7995649
-        }
-      ],
-      "designWidth": 390
+      }
     }
   },
   "i18n": {
