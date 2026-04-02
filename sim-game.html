@@ -33,54 +33,55 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="info">BIP-DOOM | Bip 6 390x450 | GYRO: Twist=Turn Tilt=Fwd | Swipe L/R: Weapon | Dbl-Tap: Shoot | R: Recalibrate</div>
+<div id="info">BIP-DOOM v4 | GYRO: Twist=Turn Tilt=Fwd | Swipe L/R: Weapon | Dbl-Tap: Shoot | R: Recal | E: Spawn</div>
 <script>
 'use strict';
 
 // ================================================================
-// ZEP-DOOM — Bip 6 Edition
-// Target: Amazfit Bip 6 — 390×450, Square, API_LEVEL 4.2
-// Controls: Tilt to move, Swipe L/R to change weapon, Dbl-Tap to shoot
+// ZEP-DOOM v4 — Bip 6 Edition
 // ================================================================
 
-// ---- Resolution: Bip 6 native ----
 var W = 390, H = 450;
+var TAU = Math.PI * 2;
+var PREC = 360;
+var SIN_T = new Float32Array(PREC), COS_T = new Float32Array(PREC);
+for (var i = 0; i < PREC; i++) {
+  SIN_T[i] = Math.sin(i / PREC * TAU);
+  COS_T[i] = Math.cos(i / PREC * TAU);
+}
+function fsin(a) {
+  var idx = ((a % TAU) * PREC / TAU + PREC * 1000) % PREC | 0;
+  return SIN_T[idx];
+}
+function fcos(a) {
+  var idx = ((a % TAU) * PREC / TAU + PREC * 1000) % PREC | 0;
+  return COS_T[idx];
+}
 
 // ================================================================
 // ZEPP OS COMPATIBILITY LAYER
-// On real device, replace with:
-//   import { Accelerometer, Gyroscope, FREQ_MODE_NORMAL } from '@zos/sensor'
-//   import { Vibrator } from '@zos/sensor'
-//   import { onGesture } from '@zos/interaction'
-//
-// Zepp OS Gyroscope: { x, y, z } in DPS (degrees per second)
-// Zepp OS Accelerometer: { x, y, z } in cm/s^2
 // ================================================================
 var ZeppOS = {
-  gestureCb:    null,
-  // Raw sensor data
-  simAccel:     { x: 0, y: 0, z: 9.8 },
-  simGyro:      { x: 0, y: 0, z: 0 },
-  // Calibrated offsets (captured at startup/neutral)
-  gyroOffset:   { x: 0, y: 0, z: 0 },
-  accelOffset:  { x: 0, y: 0, z: 0 },
+  gestureCb: null,
+  simAccel:  { x: 0, y: 0, z: 9.8 },
+  simGyro:   { x: 0, y: 0, z: 0 },
+  gyroOffset: { x: 0, y: 0, z: 0 },
+  accelOffset: { x: 0, y: 0, z: 0 },
   accelEnabled: false,
-  gyroEnabled:  false,
-  calibrated:   false,
-  calibFrames:  [],
+  gyroEnabled: false,
+  calibrated: false,
+  calibFrames: [],
   CALIB_FRAMES: 30,
 
   init: function() {
     this._setupSensors();
     this._setupGestureHandlers();
+    this._setupAudio();
   },
 
   _setupSensors: function() {
     var self = this;
-
-    // ---- DeviceMotion (browser surrogate for accel + gyro) ----
     if (typeof DeviceMotionEvent !== 'undefined') {
-      var lastMg = 0;
       var rm = function(e) {
         if (e.accelerationIncludingGravity) {
           self.simAccel.x = e.accelerationIncludingGravity.x || 0;
@@ -89,22 +90,17 @@ var ZeppOS = {
           self.accelEnabled = true;
         }
         if (e.rotationRate) {
-          // rotationRate is in rad/s — convert to degrees per second
           self.simGyro.x = (e.rotationRate.alpha || 0) * (180 / Math.PI);
           self.simGyro.y = (e.rotationRate.beta  || 0) * (180 / Math.PI);
           self.simGyro.z = (e.rotationRate.gamma || 0) * (180 / Math.PI);
           self.gyroEnabled = true;
-
-          // Auto-calibrate on first gyro data
           if (!self.calibrated && self.gyroEnabled) {
             self.calibFrames.push({
               gx: self.simGyro.x, gy: self.simGyro.y, gz: self.simGyro.z,
               ax: self.simAccel.x, ay: self.simAccel.y, az: self.simAccel.z,
               t: Date.now()
             });
-            if (self.calibFrames.length >= self.CALIB_FRAMES) {
-              self._finishCalibration();
-            }
+            if (self.calibFrames.length >= self.CALIB_FRAMES) self._finishCalibration();
           }
         }
       };
@@ -120,18 +116,13 @@ var ZeppOS = {
 
   _finishCalibration: function() {
     var n = this.calibFrames.length;
-    var gx = 0, gy = 0, gz = 0;
-    var ax = 0, ay = 0, az = 0;
+    var gx = 0, gy = 0, gz = 0, ax = 0, ay = 0, az = 0;
     for (var i = 0; i < n; i++) {
       gx += this.calibFrames[i].gx; gy += this.calibFrames[i].gy; gz += this.calibFrames[i].gz;
       ax += this.calibFrames[i].ax; ay += this.calibFrames[i].ay; az += this.calibFrames[i].az;
     }
-    this.gyroOffset.x = gx / n;
-    this.gyroOffset.y = gy / n;
-    this.gyroOffset.z = gz / n;
-    this.accelOffset.x = ax / n;
-    this.accelOffset.y = ay / n;
-    this.accelOffset.z = az / n;
+    this.gyroOffset.x = gx / n; this.gyroOffset.y = gy / n; this.gyroOffset.z = gz / n;
+    this.accelOffset.x = ax / n; this.accelOffset.y = ay / n; this.accelOffset.z = az / n;
     this.calibrated = true;
     this.calibFrames = [];
     this.vibrate('VIBRATOR_SCENE_NOTIFICATION');
@@ -144,44 +135,162 @@ var ZeppOS = {
     this.accelOffset = { x: 0, y: 0, z: 0 };
   },
 
-  // ---- Gesture handlers (tap, swipe) ----
   _setupGestureHandlers: function() {
     var c = document.getElementById('c');
-    var sx = 0, sy = 0, sTime = 0;
-    var lastTap = 0;
-
+    var sx = 0, sy = 0, sTime = 0, lastTap = 0;
     c.addEventListener('touchstart', function(e) {
-      var t = e.touches[0];
-      sx = t.clientX; sy = t.clientY; sTime = Date.now();
+      var t = e.touches[0]; sx = t.clientX; sy = t.clientY; sTime = Date.now();
     }, { passive: true });
-
     c.addEventListener('touchend', function(e) {
       var dx = e.changedTouches[0].clientX - sx;
       var dy = e.changedTouches[0].clientY - sy;
-      var dt = Date.now() - sTime;
       var dist = Math.sqrt(dx*dx + dy*dy);
+      var dt = Date.now() - sTime;
       var now = Date.now();
-
       if (dist < 15 && dt < 280) {
         if (now - lastTap < 320) {
-          // DOUBLE-TAP — shoot
           if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP');
           lastTap = 0;
-        } else {
-          lastTap = now;
-        }
+        } else { lastTap = now; }
       } else if (dist > 35) {
-        var dir = dx > 0 ? 'RIGHT' : 'LEFT';
-        if (ZeppOS.gestureCb) ZeppOS.gestureCb('GESTURE_' + dir);
+        if (ZeppOS.gestureCb) ZeppOS.gestureCb(dx > 0 ? 'GESTURE_RIGHT' : 'GESTURE_LEFT');
       }
     }, { passive: true });
-
-    c.addEventListener('click', function() {
-      if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP');
-    });
+    c.addEventListener('click', function() { if (ZeppOS.gestureCb) ZeppOS.gestureCb('DOUBLE_TAP'); });
   },
 
-  // ---- Per-frame sensor data (calibration-subtracted) ----
+  // ---- Web Audio API sound (browser simulator) ----
+  _audioCtx: null,
+  _audioEnabled: false,
+
+  _setupAudio: function() {
+    try {
+      this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      this._audioEnabled = true;
+    } catch(e) { this._audioEnabled = false; }
+  },
+
+  _resumeAudio: function() {
+    if (this._audioEnabled && this._audioCtx && this._audioCtx.state === 'suspended') {
+      this._audioCtx.resume();
+    }
+  },
+
+  playSound: function(type) {
+    if (!this._audioEnabled || !this._audioCtx) return;
+    this._resumeAudio();
+    var ctx = this._audioCtx;
+    var now = ctx.currentTime;
+    var gain = ctx.createGain();
+
+    switch(type) {
+      case 'PISTOL_SHOT':
+        // Short noise burst + mid crack
+        this._noiseBurst(0.08, 0.4, 800, 200);
+        this._tone(0.05, 0.25, 150, 'square');
+        break;
+      case 'SHOTGUN_SHOT':
+        this._noiseBurst(0.2, 0.6, 400, 80);
+        this._tone(0.1, 0.3, 100, 'sawtooth');
+        break;
+      case 'CHAIN_SHOT':
+        this._noiseBurst(0.04, 0.25, 900, 300);
+        this._tone(0.03, 0.15, 200, 'square');
+        break;
+      case 'ENEMY_HIT':
+        this._tone(0.06, 0.15, 180, 'sawtooth');
+        break;
+      case 'PLAYER_HIT':
+        this._noiseBurst(0.1, 0.3, 200, 50);
+        break;
+      case 'ENEMY_DEATH':
+        this._tone(0.15, 0.2, 120, 'sawtooth');
+        setTimeout(function() { ZeppOS._toneAnon(0.2, 0.15, 80, 'sawtooth'); }, 100);
+        break;
+      case 'PICKUP':
+        this._tone(0.05, 0.2, 440, 'sine');
+        setTimeout(function() { ZeppOS._toneAnon(0.08, 0.2, 660, 'sine'); }, 80);
+        break;
+      case 'WEAPON_SWITCH':
+        this._tone(0.03, 0.12, 330, 'sine');
+        break;
+      case 'LEVEL_COMPLETE':
+        var notes = [523, 659, 784, 1047];
+        for (var ni = 0; ni < notes.length; ni++) {
+          (function(ni, freq) {
+            setTimeout(function() { ZeppOS._toneAnon(0.18, 0.2, freq, 'sine'); }, ni * 150);
+          })(ni, notes[ni]);
+        }
+        break;
+      case 'DEMON_SIGHT':
+        this._tone(0.12, 0.12, 200, 'sawtooth');
+        setTimeout(function() { ZeppOS._toneAnon(0.15, 0.1, 160, 'sawtooth'); }, 120);
+        break;
+      case 'DEMON_ATTACK':
+        this._noiseBurst(0.1, 0.3, 300, 60);
+        break;
+      case 'LOST_SOUL':
+        this._tone(0.06, 0.15, 880, 'sine');
+        setTimeout(function() { ZeppOS._toneAnon(0.08, 0.1, 660, 'sine'); }, 60);
+        break;
+    }
+  },
+
+  _tone: function(dur, vol, freq, type) {
+    var ctx = this._audioCtx;
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + dur + 0.01);
+  },
+
+  _toneAnon: function(dur, vol, freq, type) {
+    if (!this._audioEnabled) return;
+    this._resumeAudio();
+    var ctx = this._audioCtx;
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + dur + 0.01);
+  },
+
+  _noiseBurst: function(dur, vol, freq, freqEnd) {
+    if (!this._audioEnabled) return;
+    this._resumeAudio();
+    var ctx = this._audioCtx;
+    var bufferSize = ctx.sampleRate * dur;
+    var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    for (var i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    var source = ctx.createBufferSource();
+    source.buffer = buffer;
+    var gain = ctx.createGain();
+    var filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(freq, ctx.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(freqEnd, ctx.currentTime + dur);
+    filter.Q.value = 1.5;
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    source.start(ctx.currentTime);
+    source.stop(ctx.currentTime + dur + 0.01);
+  },
+
   getGyro: function() {
     return {
       x: this.simGyro.x - this.gyroOffset.x,
@@ -197,7 +306,6 @@ var ZeppOS = {
     };
   },
 
-  // ---- Haptic feedback ----
   vibrate: function(scene) {
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       var map = {
@@ -208,7 +316,6 @@ var ZeppOS = {
         'VIBRATOR_SCENE_DURATION_LONG':   600,
         'VIBRATOR_SCENE_STRONG_REMINDER': [100, 50, 100, 50, 200],
         'VIBRATOR_SCENE_NOTIFICATION':    [40, 20, 40],
-        'VIBRATOR_SCENE_CALL':            [200, 100, 200, 100, 300],
       };
       var v = map[scene] || 50;
       navigator.vibrate(Array.isArray(v) ? v : v);
@@ -219,21 +326,171 @@ var ZeppOS = {
 };
 
 // ================================================================
+// LEVEL DATA — 24x24 Doom E1M1-inspired
+// ================================================================
+var LEVELS = [
+  // Level 0: Training — simple corridors
+  {
+    name: 'HANGAR',
+    map: [
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,2,2,2,0,0,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,1,
+      1,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,0,0,0,1,
+      1,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,4,4,0,0,0,4,4,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,4,0,0,0,0,4,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,4,0,0,0,0,4,0,0,0,0,5,5,5,0,0,1,
+      1,0,0,0,0,0,0,0,4,4,0,0,0,4,4,0,0,0,5,0,5,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,5,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,5,0,0,1,
+      1,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    ],
+    floor: [
+      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,2,2,2,1,1,1,1,1,1,1,1,1,3,3,3,1,1,1,1,1,0,
+      0,1,1,2,1,1,1,1,1,1,1,1,1,1,1,3,1,1,1,1,1,1,1,0,
+      0,1,1,2,1,1,1,1,1,1,1,1,1,1,1,3,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,4,4,4,1,1,1,4,4,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,4,1,4,1,1,1,4,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,4,1,4,1,1,1,4,1,1,1,1,5,5,5,1,1,0,
+      0,1,1,1,1,1,1,4,4,4,1,1,1,4,4,1,1,1,5,1,5,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,5,1,5,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,5,5,5,1,1,0,
+      0,1,1,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    ],
+    enemies: [
+      { type: 'IMP',    x: 11.5, y: 6.5 },
+      { type: 'IMP',    x: 14.5, y: 10.5 },
+      { type: 'DEMON', x: 5.5,  y: 10.5 },
+    ],
+    pickups: [
+      { type: 'HEALTH',  x: 3.5,  y: 6.5,  amount: 25 },
+      { type: 'HEALTH',  x: 18.5, y: 6.5,  amount: 25 },
+      { type: 'ARMOR',   x: 8.5,  y: 8.5,  amount: 20 },
+      { type: 'AMMO',    x: 14.5, y: 12.5, amount: 10 },
+      { type: 'STIMPACK',x: 10.5, y: 14.5, amount: 10 },
+    ],
+    playerStart: { x: 3.5, y: 3.5, angle: 0 }
+  },
+
+  // Level 1: The Military Base (busier, more imps)
+  {
+    name: 'COMMANDER',
+    map: [
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,2,2,2,0,1,0,0,0,0,0,0,0,0,1,0,0,0,3,3,3,0,1,
+      1,0,2,0,2,0,1,0,0,0,0,0,0,0,0,1,0,0,0,3,0,3,0,1,
+      1,0,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,1,1,0,1,1,1,0,0,0,1,1,1,1,0,1,1,1,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,1,1,1,1,
+      1,0,0,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,
+      1,0,0,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,
+      1,1,1,0,1,1,1,0,0,0,1,1,1,1,0,1,1,1,0,0,0,0,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,5,5,5,0,1,0,0,0,0,0,0,0,0,1,0,0,0,6,6,6,0,1,
+      1,0,5,0,5,0,1,0,0,0,0,0,0,0,0,1,0,0,0,6,0,6,0,1,
+      1,0,5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,6,6,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,
+      1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+      1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    ],
+    floor: [
+      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,1,0,
+      0,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,1,3,1,3,1,3,1,0,
+      0,1,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,5,5,5,1,1,1,1,1,1,1,1,1,1,1,1,6,6,6,6,6,1,0,
+      0,1,5,1,5,1,1,1,1,1,1,1,1,1,1,1,1,6,1,6,1,6,1,0,
+      0,1,5,5,5,1,1,1,1,1,1,1,1,1,1,1,1,6,6,6,6,6,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
+      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    ],
+    enemies: [
+      { type: 'IMP',     x: 5.5,  y: 5.5 },
+      { type: 'IMP',     x: 17.5, y: 5.5 },
+      { type: 'IMP',     x: 11.5, y: 9.5 },
+      { type: 'DEMON',   x: 4.5,  y: 9.5 },
+      { type: 'DEMON',   x: 18.5, y: 9.5 },
+      { type: 'LOST_SOUL', x: 11.5, y: 7.5 },
+      { type: 'LOST_SOUL', x: 8.5,  y: 11.5 },
+    ],
+    pickups: [
+      { type: 'HEALTH',   x: 2.5,  y: 2.5,  amount: 25 },
+      { type: 'HEALTH',   x: 20.5, y: 2.5,  amount: 25 },
+      { type: 'ARMOR',    x: 11.5, y: 10.5, amount: 25 },
+      { type: 'STIMPACK', x: 3.5,  y: 7.5,  amount: 10 },
+      { type: 'STIMPACK', x: 19.5, y: 7.5,  amount: 10 },
+      { type: 'AMMO',     x: 11.5, y: 13.5, amount: 10 },
+      { type: 'AMMO',     x: 7.5,  y: 14.5, amount: 10 },
+    ],
+    playerStart: { x: 3.5, y: 3.5, angle: 0.5 }
+  },
+];
+
+var MAP_W = 24, MAP_H = 24;
+
+// ================================================================
 // GAME STATE
 // ================================================================
-var player = { x: 7.5, y: 7.5, angle: 0, health: 100, armor: 0, kills: 0 };
+var player = { x: 3.5, y: 3.5, angle: 0, health: 100, armor: 0, kills: 0 };
 var enemies = [];
-var nextEnemyId = 0;
-var FPS = 0, frameCount = 0, lastFpsTime = 0;
-var running = true;
-
-// ---- Weapons ----
+var pickups = [];
+var currentLevel = 0;
 var WEAPONS = [
-  { id: 'PISTOL',   damage: 15, pellets: 1, fireRate: 18, spread: 0,    ammoType: 'BULLET', ammoMax: 200, muzzleFlash: 4, screenKick: 0.02, name: 'PISTOL' },
-  { id: 'SHOTGUN',  damage: 10, pellets: 7, fireRate: 32, spread: 0.18, ammoType: 'SHELL',  ammoMax: 20,  muzzleFlash: 8, screenKick: 0.06, name: 'SHOTGUN' },
-  { id: 'CHAINGUN', damage: 8,  pellets: 1, fireRate: 5,  spread: 0.04, ammoType: 'BULLET', ammoMax: 200, muzzleFlash: 2, screenKick: 0.015, name: 'CHAINGUN' }
+  { id: 'PISTOL',   damage: 12, pellets: 1, fireRate: 18, spread: 0,    ammoType: 'BULLET', ammoMax: 200, name: 'PISTOL' },
+  { id: 'SHOTGUN',  damage: 8,  pellets: 7, fireRate: 35, spread: 0.18, ammoType: 'SHELL',  ammoMax: 50,  name: 'SHOTGUN' },
+  { id: 'CHAINGUN', damage: 7,  pellets: 1, fireRate: 5,  spread: 0.04, ammoType: 'BULLET', ammoMax: 200, name: 'CHAINGUN' }
 ];
-var AMMO     = { BULLET: 50, SHELL: 8 };
+var AMMO     = { BULLET: 50, SHELL: 20 };
 var MAX_AMMO = { BULLET: 200, SHELL: 50 };
 var currentWeapon = 0;
 var weaponCooldown = 0;
@@ -241,234 +498,421 @@ var muzzleFlash = 0;
 var damageFlash = 0;
 var hitMarker = 0;
 var weaponBob = 0, weaponBobY = 0;
-var weaponKickAngle = 0;
+var screenShake = 0;    // current shake magnitude
+var screenShakeX = 0;   // current shake X offset
+var screenShakeY = 0;   // current shake Y offset
 var moving = false;
+var FPS = 0, frameCount = 0, lastFpsTime = 0;
+var messageText = '';
+var messageTimer = 0;
+var levelComplete = false;
+var levelCompleteTimer = 0;
+var gameOver = false;
 
-// ---- Gyroscope-based movement controls ----
-// Gyroscope: { x, y, z } in DPS (degrees per second)
-// gyro.z = yaw (twist wrist left/right) → turning
-// gyro.y = pitch (tilt watch up/down) → forward/backward
-// Gyro gives rotation rate — multiply by frame time for angle delta
-var gyroTurnGain   =  0.012;  // gyro.z DPS → turn rad/frame
-var gyroMoveGain   =  0.003;  // gyro.y DPS → move speed
-
-// ---- Map ----
-var MAP_DATA = [
-  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,2,2,0,0,0,0,0,0,3,3,0,0,1,
-  1,0,0,2,0,0,0,0,0,0,0,3,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,3,3,0,0,0,0,0,0,5,5,0,0,1,
-  1,0,0,3,0,0,0,0,0,0,0,5,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-];
-var FLOOR_DATA = [
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,2,2,1,1,1,1,1,1,3,3,1,1,0,
-  0,1,1,2,1,1,1,1,1,1,1,3,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,3,3,1,1,1,1,1,1,5,5,1,1,0,
-  0,1,1,3,1,1,1,1,1,1,1,5,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-];
-var MAP_W = 16, MAP_H = 16;
-
-// ---- Sprite data ----
-var SPR_IMP = [
-  "0000011111100000",
-  "0000122222210000",
-  "0000123333210000",
-  "0000123333210000",
-  "0000012222100000",
-  "0000012332100000",
-  "0000012332100000",
-  "0000012222100000",
-  "0000014444100000",
-  "0000114444110000",
-  "0000144444410000",
-  "0000144141410000",
-  "0000144441410000",
-  "0000014141000000",
-  "0000014111000000",
-  "0000014331000000",
-  "0000014331000000",
-  "0000014331000000",
-  "0000014111000000",
-  "0000001110000000",
-];
-var SPR_IMP_DEAD = [
-  "0000011111100000",
-  "0000122222210000",
-  "0000120002210000",
-  "0000120003210000",
-  "0000010002100000",
-  "0000010002100000",
-  "0000010002100000",
-  "0000010002100000",
-  "0000011111100000",
-  "0000111111110000",
-  "0000111111110000",
-  "0000111111110000",
-  "0000111111110000",
-  "0000011111000000",
-  "0000011111000000",
-  "0000011111000000",
-  "0000011111000000",
-  "0000011111000000",
-  "0000011111000000",
-  "0000001110000000",
-];
-
-function decodeSprite(rows) {
-  var cols = ['#000','#200','#a22','#f44','#d87'];
-  return rows.map(function(row) {
-    return row.split('').map(function(ch) {
-      return ch === '0' ? null : cols[parseInt(ch)];
-    });
-  });
-}
-var SPR_IMP_DEC  = decodeSprite(SPR_IMP);
-var SPR_DEAD_DEC = decodeSprite(SPR_IMP_DEAD);
-
-// ---- Enemy system ----
-var S = { PATROL: 0, CHASE: 1, ATTACK: 2, DEAD: 3, PAIN: 4 };
-var ENEMY_DEF = {
-  speed: 0.025, chaseSpeed: 0.038, seeRange: 6.0,
-  attackRange: 1.4, health: 30, painChance: 0.25,
-  attackDamage: 6, attackCooldown: 50
+// ================================================================
+// ENEMY DEFINITIONS
+// ================================================================
+var E = {
+  IMP: {
+    speed: 0.028, chaseSpeed: 0.040, seeRange: 6.0,
+    attackRange: 1.3, health: 30, painChance: 0.28,
+    attackDamage: 8, attackCooldown: 55,
+    spriteRows: 20, color: '#a82c2c', eyeColor: '#ffff00'
+  },
+  DEMON: {
+    speed: 0.035, chaseSpeed: 0.055, seeRange: 5.5,
+    attackRange: 1.1, health: 60, painChance: 0.20,
+    attackDamage: 14, attackCooldown: 65,
+    spriteRows: 20, color: '#cc4488', eyeColor: '#ff4444'
+  },
+  LOST_SOUL: {
+    speed: 0.055, chaseSpeed: 0.085, seeRange: 7.0,
+    attackRange: 0.8, health: 10, painChance: 0.10,
+    attackDamage: 4, attackCooldown: 30,
+    spriteRows: 16, color: '#4488ff', eyeColor: '#ffffff'
+  }
 };
+var S = { PATROL: 0, CHASE: 1, ATTACK: 2, DEAD: 3, PAIN: 4 };
+var nextEnemyId = 0;
 
-function spawnEnemy(x, y) {
-  enemies.push({ id: nextEnemyId++, x: x, y: y, angle: Math.random() * Math.PI * 2,
-    health: ENEMY_DEF.health, state: S.PATROL, stateT: 0, atkCool: 0,
-    painT: 0, seeAngle: 0, dead: false, deadT: 0, hitFlash: 0 });
-}
-function spawnEnemyNearby() {
-  var a = player.angle + Math.PI + (Math.random() - 0.5) * 1.5;
-  var d = 2 + Math.random() * 2;
-  spawnEnemy(
-    Math.max(1, Math.min(MAP_W-2, player.x + Math.cos(a) * d)),
-    Math.max(1, Math.min(MAP_H-2, player.y + Math.sin(a) * d))
-  );
-}
-spawnEnemy(4.5, 7.5);
-spawnEnemy(10.5, 4.5);
-spawnEnemy(10.5, 10.5);
-spawnEnemy(7.5, 4.5);
-
-// ---- Trig ----
-var TAU = Math.PI * 2, PREC = 360;
-var SIN_T = new Float32Array(PREC), COS_T = new Float32Array(PREC);
-for (var i = 0; i < PREC; i++) {
-  SIN_T[i] = Math.sin(i / PREC * TAU);
-  COS_T[i] = Math.cos(i / PREC * TAU);
-}
-function fsin(a) {
-  var idx = ((a % TAU) * PREC / TAU) | 0;
-  if (idx < 0) idx += PREC;
-  return SIN_T[idx];
-}
-function fcos(a) {
-  var idx = ((a % TAU) * PREC / TAU) | 0;
-  if (idx < 0) idx += PREC;
-  return COS_T[idx];
+function spawnEnemy(def) {
+  var e = {
+    id: nextEnemyId++, type: def.type,
+    x: def.x, y: def.y,
+    angle: Math.random() * TAU,
+    health: E[def.type].health,
+    maxHealth: E[def.type].health,
+    state: S.PATROL, stateT: 0, atkCool: 0,
+    painT: 0, dead: false, deadT: 0, hitFlash: 0,
+    seeAngle: 0, lastSeenT: 0, sightTimer: 0
+  };
+  enemies.push(e);
 }
 
-// ---- Raycaster constants (Bip 6 390x450) ----
-var NUM_RAYS    = 130;   // slightly more rays for higher res
+function spawnPickup(def) {
+  pickups.push({ type: def.type, x: def.x, y: def.y, amount: def.amount, taken: false });
+}
+
+function loadLevel(idx) {
+  currentLevel = idx % LEVELS.length;
+  var lvl = LEVELS[currentLevel];
+  enemies = [];
+  pickups = [];
+  player.x = lvl.playerStart.x;
+  player.y = lvl.playerStart.y;
+  player.angle = lvl.playerStart.angle;
+  player.health = 100;
+  player.armor = 0;
+  player.kills = 0;
+  AMMO = { BULLET: 50, SHELL: 20 };
+  levelComplete = false;
+  gameOver = false;
+  for (var ei = 0; ei < lvl.enemies.length; ei++) spawnEnemy(lvl.enemies[ei]);
+  for (var pi = 0; pi < lvl.pickups.length; pi++) spawnPickup(lvl.pickups[pi]);
+  showMessage('LEVEL ' + (currentLevel + 1) + ': ' + lvl.name);
+}
+
+function showMessage(txt, dur) {
+  messageText = txt;
+  messageTimer = dur || 180;
+}
+
+// ================================================================
+// SPRITE DRAWING — IMP, DEMON, LOST SOUL
+// ================================================================
+function drawEnemySprite(e, sx, sy, sw, sh, fog) {
+  var def = E[e.type];
+  var rows, cols;
+  var pixels;
+
+  if (e.dead) {
+    // Dead sprite (flat on ground)
+    rows = 8; cols = 20;
+    pixels = buildDeadSprite(e.type, e.hitFlash > 0);
+  } else {
+    rows = def.spriteRows; cols = 20;
+    pixels = buildEnemySprite(e.type, e.hitFlash > 0, e.painT > 0, e.state === S.ATTACK);
+  }
+
+  for (var r = 0; r < rows; r++) {
+    var py = (sy + r * sh / rows) | 0;
+    if (py < CEIL_BOT || py >= H) continue;
+    for (var c = 0; c < cols; c++) {
+      var color = pixels[r][c];
+      if (!color) continue;
+      var px2 = (sx + c * sw / cols) | 0;
+      if (px2 < 0 || px2 >= W) continue;
+      var cr = parseInt(color.slice(1,3), 16);
+      var cg = parseInt(color.slice(3,5), 16);
+      var cb = parseInt(color.slice(5,7), 16);
+      ctx.fillStyle = 'rgb(' + Math.min(255,cr*fog)|0 + ',' + Math.min(255,cg*fog)|0 + ',' + Math.min(255,cb*fog)|0 + ')';
+      ctx.fillRect(px2, py, (sw/cols)|0 + 1, (sh/rows)|0 + 1);
+    }
+  }
+}
+
+function buildEnemySprite(type, flash, pain, attacking) {
+  if (type === 'IMP') return buildImpSprite(flash, pain, attacking);
+  if (type === 'DEMON') return buildDemonSprite(flash, pain, attacking);
+  if (type === 'LOST_SOUL') return buildLostSoulSprite(flash, attacking);
+  return buildImpSprite(flash, pain, attacking);
+}
+
+function buildImpSprite(flash, pain, attacking) {
+  var b = flash ? '#ff4444' : pain ? '#882222' : '#a82c2c';
+  var d = flash ? '#ff8888' : '#cc4444';
+  var h = flash ? '#ffffff' : '#ffcc00';
+  var s = attacking ? '#661111' : '#3a1010';
+  return [
+    ['0','0','0','0','0','0',b,b,b,b,b,b,b,'0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0',b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0','0','0'],
+    ['0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0','0','0'],
+    ['0','0','0','0',b,b,d,d,b,b,b,b,b,b,b,'0','0','0','0','0','0','0','0'],
+    ['0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0','0'],
+    ['0','0','0',b,b,b,b,h,h,h,h,h,b,b,b,b,b,b,'0','0','0','0','0','0'],
+    ['0','0','0',b,b,b,b,h,h,h,h,h,b,b,b,b,b,b,b,'0','0','0','0','0'],
+    ['0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0'],
+    ['0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0'],
+    ['0','0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0',b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0',b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0','0'],
+    ['0','0',s,s,'0','0','0',b,b,b,b,b,b,b,'0','0','0',s,s,'0','0','0','0'],
+    ['0',s,s,s,s,'0','0','0',b,b,b,b,b,'0','0','0',s,s,s,s,'0','0','0','0'],
+    [s,s,s,s,s,s,'0','0','0',b,b,b,'0','0','0',s,s,s,s,s,s,'0','0','0'],
+    [s,s,s,s,s,s,'0','0','0',b,b,b,'0','0','0',s,s,s,s,s,s,'0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,'0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,'0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,'0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,'0','0','0','0','0','0','0','0','0'],
+  ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+}
+
+function buildDemonSprite(flash, pain, attacking) {
+  var h = flash ? '#ffffff' : '#ffcc00';
+  var s = attacking ? '#661111' : '#3a0810';
+  var b = flash ? '#ff6699' : '#cc4488';
+  var d = flash ? '#ff99bb' : '#ee6699';
+  return [
+    ['0','0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0','0'],
+    ['0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0'],
+    ['0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0'],
+    ['0','0','0',b,b,d,d,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0'],
+    ['0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0'],
+    ['0','0',b,b,b,b,h,h,h,h,h,h,h,h,h,b,b,b,b,b,b,b,'0','0','0','0'],
+    ['0','0',b,b,b,b,h,h,h,h,h,h,h,h,h,b,b,b,b,b,b,b,b,'0','0','0'],
+    ['0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0'],
+    ['0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0'],
+    ['0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0'],
+    ['0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0'],
+    ['0','0','0','0',b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,'0','0','0','0','0'],
+    [s,s,s,'0','0','0','0',b,b,b,b,b,b,b,b,b,b,'0','0','0',s,s,s,'0','0','0'],
+    [s,s,s,s,s,'0','0','0',b,b,b,b,b,b,b,'0','0','0',s,s,s,s,s,'0','0','0'],
+    [s,s,s,s,s,s,'0','0','0',b,b,b,b,b,'0','0','0',s,s,s,s,s,s,'0','0'],
+    [s,s,s,s,s,s,'0','0','0',b,b,b,b,b,'0','0','0',s,s,s,s,s,s,'0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,b,'0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,b,'0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,b,'0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0',b,b,b,'0','0','0','0','0','0','0','0','0'],
+  ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+}
+
+function buildLostSoulSprite(flash, attacking) {
+  var c = flash ? '#ffffff' : '#4488ff';
+  var e = flash ? '#ffffff' : '#88ccff';
+  return [
+    ['0','0','0','0',c,c,c,c,c,'0','0','0','0'],
+    ['0','0','0',c,c,e,e,c,c,'0','0','0','0'],
+    ['0','0',c,c,c,c,c,c,c,c,'0','0','0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,'0','0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+    [c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+    [c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+    [c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,c,'0','0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,c,'0','0'],
+    ['0','0',c,c,c,c,c,c,c,c,c,c,'0','0','0'],
+    ['0','0','0',c,c,c,c,c,c,c,c,'0','0','0','0'],
+    ['0','0','0','0',c,c,c,c,c,'0','0','0','0','0','0'],
+    ['0','0','0','0','0',c,c,'0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0','0','0','0','0','0','0'],
+    ['0','0','0','0','0','0','0','0','0','0','0','0','0','0','0'],
+  ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+}
+
+function buildDeadSprite(type, flash) {
+  if (type === 'LOST_SOUL') {
+    var c = flash ? '#ffffff' : '#4488ff';
+    return [
+      ['0','0','0','0',c,c,c,c,c,c,c,'0','0','0','0'],
+      ['0','0','0',c,c,c,c,c,c,c,c,c,'0','0','0','0'],
+      ['0',c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0'],
+      [c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+      [c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+      [c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+      ['0',c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0','0'],
+      ['0','0',c,c,c,c,c,c,c,c,c,c,c,'0','0','0','0'],
+      ['0','0','0','0','0',c,c,c,c,c,'0','0','0','0','0','0','0'],
+    ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+  }
+  // Generic dead body (IMP/DEMON)
+  var c = flash ? '#ff4444' : '#8a2020';
+  return [
+    ['0','0','0',c,c,c,c,c,c,c,c,c,c,c,'0','0','0','0','0','0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0','0','0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0','0'],
+    [c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0'],
+    [c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+    [c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0'],
+    ['0',c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0'],
+    ['0','0',c,c,c,c,c,c,c,c,c,c,c,c,c,c,'0','0','0','0'],
+    ['0','0','0',c,c,c,c,c,c,c,c,c,c,c,'0','0','0','0','0'],
+  ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+}
+
+// ================================================================
+// PICKUP DRAWING
+// ================================================================
+function drawPickup(p, sx, sy, sw, sh, fog) {
+  if (p.taken) return;
+  var rows = 14, cols = 14;
+  var pixels;
+  var c1, c2;
+  switch(p.type) {
+    case 'HEALTH':
+      c1 = '#cc2222'; c2 = '#ff4444'; break;
+    case 'STIMPACK':
+      c1 = '#228822'; c2 = '#44cc44'; break;
+    case 'ARMOR':
+      c1 = '#224488'; c2 = '#4488ff'; break;
+    case 'AMMO':
+      c1 = '#885522'; c2 = '#ffaa44'; break;
+    default:
+      c1 = '#888888'; c2 = '#cccccc';
+  }
+  pixels = buildPickupSprite(p.type, c1, c2);
+  for (var r = 0; r < rows; r++) {
+    var py = (sy + r * sh / rows) | 0;
+    if (py < CEIL_BOT || py >= H) continue;
+    for (var c = 0; c < cols; c++) {
+      var color = pixels[r] && pixels[r][c];
+      if (!color) continue;
+      var px2 = (sx + c * sw / cols) | 0;
+      if (px2 < 0 || px2 >= W) continue;
+      var cr = parseInt(color.slice(1,3), 16);
+      var cg = parseInt(color.slice(3,5), 16);
+      var cb = parseInt(color.slice(5,7), 16);
+      ctx.fillStyle = 'rgb(' + Math.min(255,cr*fog)|0 + ',' + Math.min(255,cg*fog)|0 + ',' + Math.min(255,cb*fog)|0 + ')';
+      ctx.fillRect(px2, py, (sw/cols)|0 + 1, (sh/rows)|0 + 1);
+    }
+  }
+}
+
+function buildPickupSprite(type, c1, c2) {
+  if (type === 'HEALTH' || type === 'STIMPACK') {
+    // Cross/medkit shape
+    return [
+      ['0','0','0','0',c1,c1,c1,c1,c1,'0','0','0','0','0'],
+      ['0','0','0',c1,c1,c1,c1,c1,c1,c1,'0','0','0','0'],
+      ['0','0',c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0'],
+      [c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0','0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0','0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0','0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0','0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0','0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0','0'],
+      ['0',c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0'],
+      ['0','0',c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0','0'],
+      ['0','0','0',c1,c1,c1,c1,c1,c1,'0','0','0','0','0'],
+      ['0','0','0','0','0',c1,c1,c1,'0','0','0','0','0','0','0'],
+    ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+  }
+  if (type === 'ARMOR') {
+    // Shield shape
+    return [
+      ['0','0','0','0',c1,c1,c1,c1,c1,'0','0','0','0','0'],
+      ['0','0',c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0'],
+      ['0',c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c2,c2,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0'],
+      [c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0'],
+      ['0',c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0'],
+      ['0','0',c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0'],
+      ['0','0','0','0',c1,c1,c1,c1,c1,'0','0','0','0','0'],
+      ['0','0','0','0','0','0',c1,c1,'0','0','0','0','0','0'],
+    ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+  }
+  // Ammo box
+  return [
+    ['0','0','0',c1,c1,c1,c1,c1,c1,c1,'0','0','0','0'],
+    ['0','0',c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0'],
+    ['0',c1,c1,c1,c2,c2,c2,c2,c1,c1,c1,c1,'0','0'],
+    [c1,c1,c1,c2,c2,c2,c2,c2,c2,c1,c1,c1,c1,'0'],
+    [c1,c1,c1,c2,c2,c2,c2,c2,c2,c1,c1,c1,c1,'0'],
+    [c1,c1,c1,c2,c2,c2,c2,c2,c2,c1,c1,c1,c1,'0'],
+    [c1,c1,c1,c2,c2,c2,c2,c2,c2,c1,c1,c1,c1,'0'],
+    [c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0'],
+    [c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0'],
+    ['0',c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0'],
+    ['0','0',c1,c1,c1,c1,c1,c1,c1,c1,c1,'0','0','0'],
+    ['0','0','0',c1,c1,c1,c1,c1,c1,c1,'0','0','0','0'],
+    ['0','0','0','0',c1,c1,c1,c1,c1,'0','0','0','0','0'],
+    ['0','0','0','0','0','0',c1,c1,'0','0','0','0','0','0'],
+  ].map(function(row) { return row.map(function(ch) { return ch === '0' ? null : ch; }); });
+}
+
+// ================================================================
+// DDA RAYCASTER
+// ================================================================
+var NUM_RAYS    = 130;
 var FOV         = Math.PI / 3;
 var HALF_FOV    = FOV / 2;
-var CEIL_BOT    = (H * 0.26) | 0;   // ~117
-var WALL_BOT    = (H * 0.74) | 0;   // ~333
+var CEIL_BOT    = (H * 0.24) | 0;
+var WALL_BOT    = (H * 0.76) | 0;
 var WALL_ZONE_H = WALL_BOT - CEIL_BOT;
-var HALF_WZH    = WALL_ZONE_H / 2;
-var NUM_CEIL    = 16;
-var NUM_FLR     = 16;
+var NUM_CEIL    = 14;
+var NUM_FLR     = 14;
 
 var stripDistFloor = new Float32Array(NUM_FLR);
 var stripDistCeil  = new Float32Array(NUM_CEIL);
 for (var sfi = 0; sfi < NUM_FLR; sfi++) {
-  stripDistFloor[sfi] = HALF_WZH / (((((sfi + 0.5) / NUM_FLR) - 0.5)) + 0.001);
+  var t = ((sfi + 0.5) / NUM_FLR) - 0.5;
+  stripDistFloor[sfi] = (WALL_ZONE_H * 0.5) / (Math.abs(t) + 0.001);
 }
 for (var ci = 0; ci < NUM_CEIL; ci++) {
-  stripDistCeil[ci] = HALF_WZH / (((((NUM_CEIL - ci - 0.5) / NUM_CEIL) - 0.5)) + 0.001);
+  var tc = ((NUM_CEIL - ci - 0.5) / NUM_CEIL) - 0.5;
+  stripDistCeil[ci] = (WALL_ZONE_H * 0.5) / (Math.abs(tc) + 0.001);
 }
 
-// ---- DDA ----
+function getMapData(x, y) {
+  var mx = x | 0, my = y | 0;
+  if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) return 1;
+  return LEVELS[currentLevel].map[my * MAP_W + mx] || 0;
+}
+
 function castRay(px, py, angle) {
   var a = angle % TAU; if (a < 0) a += TAU;
-  var rdx = fcos(a), rdy = fsin(a);
+  var rdx = Math.cos(a), rdy = Math.sin(a);
   var mx = px | 0, my = py | 0;
   var ddX = Math.abs(1 / rdx), ddY = Math.abs(1 / rdy);
-  var sX, sY, sdX, sdY;
-  if (rdx < 0) { sX = -1; sdX = (px - mx) * ddX; }
-  else          { sX =  1; sdX = (mx + 1 - px) * ddX; }
-  if (rdy < 0) { sY = -1; sdY = (py - my) * ddY; }
-  else          { sY =  1; sdY = (my + 1 - py) * ddY; }
+  var sX = rdx < 0 ? -1 : 1, sY = rdy < 0 ? -1 : 1;
+  var sdX = rdx < 0 ? (px - mx) * ddX : (mx + 1 - px) * ddX;
+  var sdY = rdy < 0 ? (py - my) * ddY : (my + 1 - py) * ddY;
   var hit = 0, side = 0, wallType = 1, steps = 0;
   while (!hit && steps < 64) {
     steps++;
     if (sdX < sdY) { sdX += ddX; mx += sX; side = 0; }
     else            { sdY += ddY; my += sY; side = 1; }
     if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) { hit = 1; wallType = 1; }
-    else if (MAP_DATA[my * MAP_W + mx] > 0) { hit = 1; wallType = MAP_DATA[my * MAP_W + mx]; }
+    else { var t = LEVELS[currentLevel].map[my * MAP_W + mx]; if (t > 0) { hit = 1; wallType = t; } }
   }
-  var dist = side === 0
-    ? Math.abs((mx - px + (1 - sX) / 2) / rdx)
-    : Math.abs((my - py + (1 - sY) / 2) / rdy);
+  var dist = side === 0 ? Math.abs((mx - px + (1 - sX) / 2) / rdx) : Math.abs((my - py + (1 - sY) / 2) / rdy);
   return { dist: dist, wallType: wallType, side: side };
 }
 
 function canMove(x, y) {
-  var r = 0.2;
-  var check = function(ox, oy) {
-    var tx = (x+ox)|0, ty = (y+oy)|0;
-    return tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H && MAP_DATA[ty*MAP_W+tx] === 0;
-  };
-  return check(-r,-r) && check(r,-r) && check(-r,r) && check(r,r);
-}
-function canMoveEnemy(x, y) {
-  var r = 0.2;
-  var corners = [[-r,-r],[r,-r],[-r,r],[r,r]];
+  var r = 0.22;
+  var checks = [[-r,-r],[r,-r],[-r,r],[r,r]];
   for (var i = 0; i < 4; i++) {
-    var cx = (x+corners[i][0])|0, cy = (y+corners[i][1])|0;
-    if (cx < 0 || cx >= MAP_W || cy < 0 || cy >= MAP_H) return false;
-    if (MAP_DATA[cy*MAP_W+cx] > 0) return false;
+    var tx = (x+checks[i][0])|0, ty = (y+checks[i][1])|0;
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
+    if (LEVELS[currentLevel].map[ty*MAP_W+tx] > 0) return false;
   }
   return true;
 }
 
-// ---- Enemy AI ----
+function canMoveEnemy(x, y) {
+  var r = 0.22;
+  var checks = [[-r,-r],[r,-r],[-r,r],[r,r]];
+  for (var i = 0; i < 4; i++) {
+    var tx = (x+checks[i][0])|0, ty = (y+checks[i][1])|0;
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
+    if (LEVELS[currentLevel].map[ty*MAP_W+tx] > 0) return false;
+  }
+  return true;
+}
+
+// ================================================================
+// ENEMY AI
+// ================================================================
 function enemyDistToPlayer(e) { return Math.sqrt((player.x-e.x)**2 + (player.y-e.y)**2); }
 function enemyAngleToPlayer(e) { return Math.atan2(player.y-e.y, player.x-e.x); }
 function angleDiff(a, b) {
   var d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+  while (d > Math.PI) d -= TAU;
+  while (d < -Math.PI) d += TAU;
   return Math.abs(d);
 }
 function enemyCanSeePlayer(e) {
   var d = enemyDistToPlayer(e);
-  if (d > ENEMY_DEF.seeRange) return false;
-  return angleDiff(enemyAngleToPlayer(e), e.angle) < Math.PI * 0.4;
+  if (d > E[e.type].seeRange) return false;
+  var targetAngle = enemyAngleToPlayer(e);
+  var diff = angleDiff(targetAngle, e.angle);
+  return diff < Math.PI * 0.45;
 }
 
 function updateEnemy(e) {
@@ -479,179 +923,266 @@ function updateEnemy(e) {
   if (e.dead) { e.deadT++; return; }
 
   var dist = enemyDistToPlayer(e);
+  var def = E[e.type];
   var angleToPlayer = enemyAngleToPlayer(e);
 
+  // Turn toward player when chasing
   if (e.state === S.CHASE || e.state === S.ATTACK) {
     var diff = angleToPlayer - e.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    e.angle += diff * 0.08;
-  } else if (e.state === S.PATROL && e.stateT % 60 === 0) {
-    e.angle += (Math.random() - 0.5) * 0.6;
+    while (diff > Math.PI) diff -= TAU;
+    while (diff < -Math.PI) diff += TAU;
+    e.angle += diff * (e.state === S.ATTACK ? 0.12 : 0.08);
+  } else if (e.state === S.PATROL && e.stateT % 90 === 0) {
+    e.angle += (Math.random() - 0.5) * 0.8;
+  }
+
+  // See player?
+  if (enemyCanSeePlayer(e)) {
+    e.lastSeenT = e.stateT;
+    e.seeAngle = angleToPlayer;
+    if (e.state === S.PATROL || e.state === S.PAIN) {
+      e.state = S.CHASE; e.stateT = 0;
+      if (e.type === 'DEMON') ZeppOS.playSound('DEMON_SIGHT');
+    }
+  } else if (e.state === S.CHASE && e.stateT - e.lastSeenT > 200) {
+    e.state = S.PATROL; e.stateT = 0;
   }
 
   switch (e.state) {
     case S.PATROL:
-      if (enemyCanSeePlayer(e)) { e.state = S.CHASE; e.stateT = 0; e.seeAngle = angleToPlayer; }
+      // Wander
+      if (e.stateT % 60 === 0) e.angle += (Math.random() - 0.5) * 0.6;
+      var nx = e.x + Math.cos(e.angle) * def.speed;
+      var ny = e.y + Math.sin(e.angle) * def.speed;
+      if (!canMoveEnemy(nx, e.y)) e.angle += Math.PI * 0.5 + Math.random();
+      else if (!canMoveEnemy(e.x, ny)) e.angle += Math.random() * Math.PI;
+      else { if (canMoveEnemy(nx, ny)) { e.x = nx; e.y = ny; } }
       break;
+
     case S.CHASE:
-      if (!enemyCanSeePlayer(e) && e.stateT > 180) { e.state = S.PATROL; e.stateT = 0; break; }
-      if (dist < ENEMY_DEF.attackRange) { e.state = S.ATTACK; e.stateT = 0; break; }
-      if (dist > 0.5) {
-        var nx = e.x + Math.cos(angleToPlayer) * ENEMY_DEF.chaseSpeed;
-        var ny = e.y + Math.sin(angleToPlayer) * ENEMY_DEF.chaseSpeed;
-        if (canMoveEnemy(nx, e.y)) e.x = nx;
-        if (canMoveEnemy(e.x, ny)) e.y = ny;
+      if (dist < def.attackRange) { e.state = S.ATTACK; e.stateT = 0; break; }
+      if (dist > 0.4) {
+        var cs = e.sightTimer > 0 ? def.chaseSpeed : def.chaseSpeed * 0.7;
+        e.sightTimer--;
+        var cx = e.x + Math.cos(angleToPlayer) * cs;
+        var cy = e.y + Math.sin(angleToPlayer) * cs;
+        if (canMoveEnemy(cx, e.y)) e.x = cx;
+        if (canMoveEnemy(e.x, cy)) e.y = cy;
       }
       break;
+
     case S.ATTACK:
-      if (dist > ENEMY_DEF.attackRange * 1.5) { e.state = S.CHASE; e.stateT = 0; break; }
+      if (dist > def.attackRange * 1.6) { e.state = S.CHASE; e.stateT = 0; break; }
       if (e.atkCool === 0) {
-        var kbAngle = Math.atan2(player.y-e.y, player.x-e.x);
-        player.health -= ENEMY_DEF.attackDamage;
+        var kbAngle = enemyAngleToPlayer(e);
+        var dmg = def.attackDamage + ((Math.random() - 0.5) * 4) | 0;
+        player.health -= dmg;
         if (player.health < 0) player.health = 0;
-        damageFlash = 10;
+        damageFlash = 12;
+        screenShake = 4;
         ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_STRONG');
-        var kb = 0.15;
+        ZeppOS.playSound('PLAYER_HIT');
+        if (e.type === 'DEMON') ZeppOS.playSound('DEMON_ATTACK');
+        if (e.type === 'LOST_SOUL') ZeppOS.playSound('LOST_SOUL');
+        var kb = 0.18;
         if (canMove(player.x - Math.cos(kbAngle)*kb, player.y - Math.sin(kbAngle)*kb)) {
           player.x -= Math.cos(kbAngle)*kb;
           player.y -= Math.sin(kbAngle)*kb;
         }
-        e.atkCool = ENEMY_DEF.attackCooldown;
+        e.atkCool = def.attackCooldown;
+        if (player.health <= 0) { gameOver = true; return; }
       }
-      if (e.atkCool > ENEMY_DEF.attackCooldown * 0.6) { e.state = S.PAIN; e.stateT = 0; }
+      if (e.atkCool > def.attackCooldown * 0.5) e.state = S.PAIN;
       break;
+
     case S.PAIN:
-      if (e.stateT > 10) e.state = enemyDistToPlayer(e) < ENEMY_DEF.attackRange ? S.ATTACK : S.CHASE;
+      if (e.stateT > 8) e.state = dist < def.attackRange ? S.ATTACK : S.CHASE;
       break;
   }
 }
 
-// ---- Shooting ----
+// ================================================================
+// SHOOTING
+// ================================================================
 function tryShoot() {
+  if (levelComplete || gameOver) return;
   var wp = WEAPONS[currentWeapon];
-  if (weaponCooldown > 0 || AMMO[wp.ammoType] <= 0) return;
+  if (weaponCooldown > 0 || AMMO[wp.ammoType] <= 0) {
+    // Click empty
+    if (AMMO[wp.ammoType] <= 0) ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_LIGHT');
+    return;
+  }
   AMMO[wp.ammoType]--;
   weaponCooldown = wp.fireRate;
-  muzzleFlash = wp.muzzleFlash;
-  weaponKickAngle = wp.screenKick;
+  muzzleFlash = wp.muzzleFlash || 6;
+  screenShake = currentWeapon === 1 ? 8 : currentWeapon === 2 ? 3 : 5;
   ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_LIGHT');
+  ZeppOS.playSound(wp.id + '_SHOT');
 
-  var px = player.x, py = player.y;
-  var baseAngle = player.angle;
-  var hitSomething = false;
+  var sounds = { PISTOL: 'PISTOL_SHOT', SHOTGUN: 'SHOTGUN_SHOT', CHAINGUN: 'CHAIN_SHOT' };
+  ZeppOS.playSound(sounds[wp.id] || 'PISTOL_SHOT');
 
+  var bestEnemy = null, bestDist = 999, bestT = 0;
+  for (var ei = 0; ei < enemies.length; ei++) {
+    var enm = enemies[ei];
+    if (enm.dead) continue;
+    var edx = enm.x - player.x, edy = enm.y - player.y;
+    var eDist = Math.sqrt(edx*edx + edy*edy);
+    var t = edx * Math.cos(player.angle) + edy * Math.sin(player.angle);
+    if (t < 0) continue;
+    var closestX = player.x + Math.cos(player.angle) * t;
+    var closestY = player.y + Math.sin(player.angle) * t;
+    var lateral = Math.sqrt((enm.x-closestX)**2 + (enm.y-closestY)**2);
+    var ray = castRay(player.x, player.y, player.angle);
+    if (lateral < 0.4 + E[enm.type].seeRange * 0.05 && eDist < bestDist) {
+      var wallDist = ray.dist;
+      if (eDist < wallDist) {
+        bestDist = eDist; bestEnemy = enm; bestT = t;
+      }
+    }
+  }
+
+  // Check each pellet
+  var pelletsHit = 0;
   for (var p = 0; p < wp.pellets; p++) {
     var spread = (Math.random() - 0.5) * wp.spread;
-    var angle = baseAngle + spread;
+    var angle = player.angle + spread;
     var rdx = Math.cos(angle), rdy = Math.sin(angle);
-
-    var mx = px|0, my = py|0;
+    var mx = player.x | 0, my = player.y | 0;
     var ddX = Math.abs(1/rdx), ddY = Math.abs(1/rdy);
     var sX = rdx < 0 ? -1 : 1, sY = rdy < 0 ? -1 : 1;
-    var sdX = rdx < 0 ? (px-mx)*ddX : (mx+1-px)*ddX;
-    var sdY = rdy < 0 ? (py-my)*ddY : (my+1-py)*ddY;
+    var sdX = rdx < 0 ? (player.x-mx)*ddX : (mx+1-player.x)*ddX;
+    var sdY = rdy < 0 ? (player.y-my)*ddY : (my+1-player.y)*ddY;
     var wallHit = 0, step = 0, wallDist = 99;
     while (!wallHit && step < 32) {
       step++;
       if (sdX < sdY) { sdX += ddX; mx += sX; }
       else            { sdY += ddY; my += sY; }
       if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) { wallHit = 1; break; }
-      if (MAP_DATA[my*MAP_W+mx] > 0) { wallHit = 1; break; }
+      if (LEVELS[currentLevel].map[my*MAP_W+mx] > 0) { wallHit = 1; break; }
     }
     wallDist = step > 0 ? (sdX < sdY ? sdX : sdY) : 99;
 
-    var bestDist = 999, bestEnemy = null;
+    // Check enemies
     for (var ei = 0; ei < enemies.length; ei++) {
       var enm = enemies[ei];
       if (enm.dead) continue;
-      var edx = enm.x - px, edy = enm.y - py;
+      var edx = enm.x - player.x, edy = enm.y - player.y;
       var eDist = Math.sqrt(edx*edx + edy*edy);
       var t = edx * rdx + edy * rdy;
       if (t < 0) continue;
-      var closestX = px + rdx*t, closestY = py + rdy*t;
+      var closestX = player.x + rdx*t, closestY = player.y + rdy*t;
       var lateral = Math.sqrt((enm.x-closestX)**2 + (enm.y-closestY)**2);
-      if (lateral < 0.4 && eDist < bestDist && eDist < wallDist) {
-        bestDist = eDist;
-        bestEnemy = enm;
-      }
-    }
-    if (bestEnemy) {
-      bestEnemy.health -= wp.damage;
-      bestEnemy.painT = 6;
-      bestEnemy.hitFlash = 4;
-      hitSomething = true;
-      if (bestEnemy.health <= 0) {
-        bestEnemy.dead = true; bestEnemy.deadT = 0; bestEnemy.state = S.DEAD;
-        player.kills++;
-        ZeppOS.vibrate('VIBRATOR_SCENE_NOTIFICATION');
+      var hitRadius = enm.type === 'LOST_SOUL' ? 0.3 : 0.4;
+      if (lateral < hitRadius && eDist < bestDist && eDist < wallDist) {
+        bestDist = eDist; bestEnemy = enm;
       }
     }
   }
-  if (hitSomething) hitMarker = 8;
+
+  if (bestEnemy) {
+    var finalDmg = wp.damage + ((Math.random() - 0.5) * 4) | 0;
+    if (bestEnemy.type === 'LOST_SOUL') finalDmg = (finalDmg * 1.5) | 0;
+    if (bestEnemy.type === 'DEMON') finalDmg = (finalDmg * 0.8) | 0;
+    bestEnemy.health -= finalDmg;
+    bestEnemy.painT = 6;
+    bestEnemy.hitFlash = 4;
+    hitMarker = 8;
+    ZeppOS.playSound('ENEMY_HIT');
+    if (bestEnemy.health <= 0) {
+      bestEnemy.dead = true; bestEnemy.deadT = 0; bestEnemy.state = S.DEAD;
+      player.kills++;
+      ZeppOS.vibrate('VIBRATOR_SCENE_NOTIFICATION');
+      ZeppOS.playSound('ENEMY_DEATH');
+      // Lost souls explode on death (no corpse)
+      if (bestEnemy.type === 'LOST_SOUL') { bestEnemy.deadT = 9999; }
+    }
+  }
 }
 
-// ---- Colors ----
-var WALL_COLORS   = ['#404040','#808080','#661111','#116611','#112255','#CC8822'];
-var FLOOR_COLORS  = ['#1108','#2211','#2211','#1142','#2211','#2211'];
-var SKY_NEAR = '#0D0D20', SKY_FAR = '#1A1828';
-
-function wallColor(t)  { return WALL_COLORS[(t-1) % WALL_COLORS.length] || '#404040'; }
-function floorColor(t) { return '#' + (FLOOR_COLORS[t % FLOOR_COLORS.length] || '1108'); }
-
-function shadeHex(hex, dist, dim) {
-  var fog = Math.min(0.95, 1.3 / Math.sqrt(dist + 1.0));
-  var d = fog * (dim !== undefined ? dim : 1.0);
-  return 'rgb(' + ((parseInt(hex.slice(0,2),16)*d)|0) + ',' +
-                 ((parseInt(hex.slice(2,4),16)*d)|0) + ',' +
-                 ((parseInt(hex.slice(4,6),16)*d)|0) + ')';
-}
-
-// ---- Update ----
-var MOVE_SPD = 0.06, TURN_SPD = 0.08;
+// ================================================================
+// UPDATE
+// ================================================================
+var gyroTurnGain = 0.012, gyroMoveGain = 0.003;
 var keys = {};
+var lastUpdateTime = performance.now();
+
 window.addEventListener('keydown', function(e) {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
-  if (e.code === 'Digit1') currentWeapon = 0;
-  if (e.code === 'Digit2') currentWeapon = 1;
-  if (e.code === 'Digit3') currentWeapon = 2;
+  if (e.code === 'Digit1') switchWeapon(0);
+  if (e.code === 'Digit2') switchWeapon(1);
+  if (e.code === 'Digit3') switchWeapon(2);
   if (e.code === 'KeyE') spawnEnemyNearby();
   if (e.code === 'KeyR') ZeppOS.recalibrate();
+  if (e.code === 'KeyN') { if (levelComplete) nextLevel(); }
 });
 window.addEventListener('keyup', function(e) { keys[e.code] = false; });
 
-var lastUpdateTime = performance.now();
+function switchWeapon(idx) {
+  if (idx === currentWeapon) return;
+  currentWeapon = idx;
+  weaponCooldown = 0;
+  ZeppOS.playSound('WEAPON_SWITCH');
+  ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_LIGHT');
+}
+
+function spawnEnemyNearby() {
+  var a = player.angle + Math.PI + (Math.random() - 0.5) * 1.5;
+  var d = 2 + Math.random() * 2;
+  var ex = Math.max(1, Math.min(MAP_W-2, player.x + Math.cos(a) * d));
+  var ey = Math.max(1, Math.min(MAP_H-2, player.y + Math.sin(a) * d));
+  var types = ['IMP','DEMON','LOST_SOUL'];
+  spawnEnemy({ type: types[Math.random() * 3 | 0], x: ex, y: ey });
+  showMessage('ENEMY SPAWNED!');
+}
+
+function nextLevel() {
+  loadLevel(currentLevel + 1);
+}
 
 function update() {
   var now = performance.now();
-  var dt = Math.min((now - lastUpdateTime) / 1000, 0.1); // seconds, capped at 100ms
+  var dt = Math.min((now - lastUpdateTime) / 1000, 0.1);
   lastUpdateTime = now;
+
+  if (levelComplete) {
+    levelCompleteTimer++;
+    if (levelCompleteTimer > 30) {
+      // Auto-advance after 3 seconds
+    }
+    return;
+  }
+  if (gameOver) return;
 
   if (weaponCooldown > 0) weaponCooldown--;
   if (muzzleFlash > 0) muzzleFlash--;
   if (damageFlash > 0) damageFlash--;
   if (hitMarker > 0) hitMarker--;
-  weaponKickAngle *= 0.8;
+  if (messageTimer > 0) messageTimer--;
+
+  // Screen shake decay
+  if (screenShake > 0) {
+    screenShakeX = (Math.random() - 0.5) * screenShake * 1.5;
+    screenShakeY = (Math.random() - 0.5) * screenShake * 1.5;
+    screenShake *= 0.75;
+    if (screenShake < 0.3) { screenShake = 0; screenShakeX = 0; screenShakeY = 0; }
+  }
 
   // Weapon bob
   if (moving) { weaponBob += 0.12; weaponBobY = Math.sin(weaponBob) * 3; }
   else weaponBobY *= 0.85;
 
-  // Gyroscope-based movement
-  // gyro.z = yaw rate (DPS) — twist wrist left/right → turn
-  // gyro.y = pitch rate (DPS) — tilt watch up/down → move forward/back
-  // Gyro is already calibrated (offset subtracted) in ZeppOS.getGyro()
+  // Gyro movement
   var gyro = ZeppOS.getGyro();
-  var gyroTurn   = gyro.z * gyroTurnGain * dt * 60;  // DPS × gain × dt × 60fps norm
-  var gyroFwd    = gyro.y * gyroMoveGain * dt * 60;
+  var gyroTurn = gyro.z * gyroTurnGain * dt * 60;
+  var gyroFwd  = gyro.y * gyroMoveGain * dt * 60;
 
-  // Keyboard overrides
   var kTurn = 0, kFwd = 0;
-  if (keys['ArrowLeft']  || keys['KeyA']) kTurn -= TURN_SPD;
-  if (keys['ArrowRight'] || keys['KeyD']) kTurn += TURN_SPD;
-  if (keys['ArrowUp']    || keys['KeyW']) kFwd += MOVE_SPD;
-  if (keys['ArrowDown']  || keys['KeyS']) kFwd -= MOVE_SPD;
+  if (keys['ArrowLeft']  || keys['KeyA']) kTurn -= 0.08;
+  if (keys['ArrowRight'] || keys['KeyD']) kTurn += 0.08;
+  if (keys['ArrowUp']    || keys['KeyW']) kFwd += 0.06;
+  if (keys['ArrowDown']  || keys['KeyS']) kFwd -= 0.06;
   if (keys['Space']) tryShoot();
 
   var totalTurn = gyroTurn + kTurn;
@@ -661,50 +1192,85 @@ function update() {
   player.angle = ((player.angle % TAU) + TAU) % TAU;
 
   if (Math.abs(totalFwd) > 0.001) {
-    var dx = fcos(player.angle) * totalFwd;
-    var dy = fsin(player.angle) * totalFwd;
+    var dx = Math.cos(player.angle) * totalFwd;
+    var dy = Math.sin(player.angle) * totalFwd;
     if (canMove(player.x + dx, player.y + dy)) { player.x += dx; player.y += dy; moving = true; }
     else moving = false;
-  } else {
-    moving = false;
-  }
+  } else { moving = false; }
 
+  // Enemy update
   for (var ei = 0; ei < enemies.length; ei++) updateEnemy(enemies[ei]);
-}
 
-// ---- Sprite drawing ----
-function drawSprite(sprite, sx, sy, sw, sh, fog) {
-  var rows = sprite.length, cols = sprite[0].length;
-  for (var r = 0; r < rows; r++) {
-    var py = (sy + r * sh / rows) | 0;
-    if (py < CEIL_BOT || py >= H) continue;
-    var nextPy = (sy + (r+1) * sh / rows) | 0;
-    var rowH = nextPy - py;
-    for (var c = 0; c < cols; c++) {
-      var color = sprite[r][c];
-      if (!color) continue;
-      var px2 = (sx + c * sw / cols) | 0;
-      if (px2 < 0 || px2 >= W) continue;
-      var nextPx = (sx + (c+1) * sw / cols) | 0;
-      var colW = nextPx - px2;
-      var cr = parseInt(color.slice(1,3), 16);
-      var cg = parseInt(color.slice(3,5), 16);
-      var cb = parseInt(color.slice(5,7), 16);
-      ctx.fillStyle = 'rgb(' + Math.min(255,cr*fog)|0 + ',' + Math.min(255,cg*fog)|0 + ',' + Math.min(255,cb*fog)|0 + ')';
-      ctx.fillRect(px2, py, colW + 1, rowH + 1);
+  // Pickup collection
+  for (var pi = 0; pi < pickups.length; pi++) {
+    var p = pickups[pi];
+    if (p.taken) continue;
+    var dx = player.x - p.x, dy = player.y - p.y;
+    if (dx*dx + dy*dy < 0.5) {
+      p.taken = true;
+      var msg = '';
+      switch(p.type) {
+        case 'HEALTH':
+          player.health = Math.min(100, player.health + p.amount);
+          msg = '+' + p.amount + ' HP';
+          break;
+        case 'STIMPACK':
+          player.health = Math.min(100, player.health + p.amount);
+          msg = '+' + p.amount + ' HP';
+          break;
+        case 'ARMOR':
+          player.armor = Math.min(100, player.armor + p.amount);
+          msg = '+' + p.amount + ' AR';
+          break;
+        case 'AMMO':
+          AMMO[p.amount > 15 ? 'SHELL' : 'BULLET'] = Math.min(
+            p.amount > 15 ? MAX_AMMO.SHELL : MAX_AMMO.BULLET,
+            AMMO[p.amount > 15 ? 'SHELL' : 'BULLET'] + p.amount
+          );
+          msg = '+' + p.amount + ' AMMO';
+          break;
+      }
+      ZeppOS.playSound('PICKUP');
+      ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_MIDDLE');
+      showMessage(msg, 90);
     }
   }
+
+  // Check level complete
+  var allDead = enemies.length > 0 && enemies.every(function(e) { return e.dead; });
+  if (allDead && !levelComplete) {
+    levelComplete = true; levelCompleteTimer = 0;
+    ZeppOS.playSound('LEVEL_COMPLETE');
+    showMessage('LEVEL COMPLETE!', 9999);
+  }
 }
 
-// ---- Render ----
+// ================================================================
+// RENDER
+// ================================================================
 var ctx;
+var WALL_COLORS  = ['#404040','#7a7a7a','#5a1515','#1a4a1a','#0a2a5a','#8a6020'];
+var FLOOR_COLORS = ['#0d0a08','#1a1210','#1a1210','#0d1a10','#1a1210','#1a1210'];
+var SKY_NEAR = '#080818', SKY_FAR = '#12102a';
+
+function shadeHex(hex, dist, dim) {
+  var fog = Math.min(0.96, 1.5 / Math.sqrt(dist + 0.5));
+  var d = fog * (dim !== undefined ? dim : 1.0);
+  return 'rgb(' + (parseInt(hex.slice(1,3),16)*d)|0 + ',' + (parseInt(hex.slice(3,5),16)*d)|0 + ',' + (parseInt(hex.slice(5,7),16)*d)|0 + ')';
+}
+
 function render() {
+  var lvl = LEVELS[currentLevel];
   var angle = player.angle;
   var px = player.x, py = player.y;
   var leftAngle  = angle - HALF_FOV;
   var rightAngle = angle + HALF_FOV;
-  var lrdx = fcos(rightAngle), lrdy = fsin(rightAngle);
-  var fldx = fcos(leftAngle),  fldy = fsin(leftAngle);
+  var lrdx = Math.cos(rightAngle), lrdy = Math.sin(rightAngle);
+  var fldx = Math.cos(leftAngle),  fldy = Math.sin(leftAngle);
+
+  // Apply screen shake
+  ctx.save();
+  ctx.translate(screenShakeX | 0, screenShakeY | 0);
 
   // Sky
   var skyGrad = ctx.createLinearGradient(0, 0, 0, CEIL_BOT);
@@ -713,13 +1279,13 @@ function render() {
   ctx.fillStyle = skyGrad;
   ctx.fillRect(0, 0, W, CEIL_BOT);
 
-  // Ceiling
+  // Ceiling strips
   for (var ci = 0; ci < NUM_CEIL; ci++) {
     var distC = stripDistCeil[ci];
-    var fogC = Math.min(0.95, 1.3 / Math.sqrt(distC + 1.0));
-    var skyT = Math.min(1.0, distC / 20.0);
-    var rN = parseInt(SKY_NEAR.slice(0,2),16), gN = parseInt(SKY_NEAR.slice(2,4),16), bN = parseInt(SKY_NEAR.slice(4,6),16);
-    var rF = parseInt(SKY_FAR.slice(0,2),16),  gF = parseInt(SKY_FAR.slice(2,4),16),  bF = parseInt(SKY_FAR.slice(4,6),16);
+    var fogC = Math.min(0.96, 1.5 / Math.sqrt(distC + 0.5));
+    var skyT = Math.min(1.0, distC / 25.0);
+    var rN = parseInt(SKY_NEAR.slice(1,3),16), gN = parseInt(SKY_NEAR.slice(3,5),16), bN = parseInt(SKY_NEAR.slice(5,7),16);
+    var rF = parseInt(SKY_FAR.slice(1,3),16),  gF = parseInt(SKY_FAR.slice(3,5),16),  bF = parseInt(SKY_FAR.slice(5,7),16);
     var sr = (rN+(rF-rN)*skyT)*fogC|0, sg = (gN+(gF-gN)*skyT)*fogC|0, sb = (bN+(bF-bN)*skyT)*fogC|0;
     var yC = (ci * CEIL_BOT / NUM_CEIL) | 0;
     var nextYC = ((ci+1) * CEIL_BOT / NUM_CEIL) | 0;
@@ -739,12 +1305,13 @@ function render() {
     if (wallH < 1) wallH = 1;
     var wallY = CEIL_BOT + ((WALL_ZONE_H - wallH) >> 1);
     var x = (ri * colW) | 0;
-    var sideDim = ray.side === 1 ? 0.65 : 1.0;
-    ctx.fillStyle = shadeHex(wallColor(ray.wallType), ray.dist, sideDim);
+    var sideDim = ray.side === 1 ? 0.6 : 1.0;
+    var baseCol = (WALL_COLORS[(ray.wallType-1) % WALL_COLORS.length]) || '#404040';
+    ctx.fillStyle = shadeHex(baseCol, ray.dist, sideDim);
     ctx.fillRect(x, wallY, colW + 1, wallH);
   }
 
-  // Floor
+  // Floor strips
   for (var fi = 0; fi < NUM_FLR; fi++) {
     var distF = stripDistFloor[fi];
     var lfx = px + fldx * distF, lfy = py + fldy * distF;
@@ -753,135 +1320,77 @@ function render() {
     var fmx = cfmx | 0, fmy = cfmy | 0;
     var floorType = 0;
     if (fmx >= 0 && fmx < MAP_W && fmy >= 0 && fmy < MAP_H)
-      floorType = FLOOR_DATA[fmy*MAP_W+fmx] || 0;
+      floorType = lvl.floor[fmy*MAP_W+fmx] || 0;
     var yF = (WALL_BOT + fi * (H - WALL_BOT) / NUM_FLR) | 0;
     var nextYF = (WALL_BOT + (fi+1) * (H - WALL_BOT) / NUM_FLR) | 0;
-    ctx.fillStyle = shadeHex(floorColor(floorType), distF, 1.0);
+    var fc = (FLOOR_COLORS[floorType % FLOOR_COLORS.length]) || '#0d0a08';
+    ctx.fillStyle = shadeHex(fc, distF, 1.0);
     ctx.fillRect(0, yF, W, nextYF - yF + 1);
   }
 
-  // Enemy sprites
-  for (var ei = 0; ei < enemies.length; ei++) {
-    var e = enemies[ei];
+  // Pickup sprites
+  for (var pi = 0; pi < pickups.length; pi++) {
+    var pk = pickups[pi];
+    if (pk.taken) continue;
+    var edx = pk.x - px, edy = pk.y - py;
+    var eDist = Math.sqrt(edx*edx + edy*edy);
+    if (eDist < 0.3) continue;
+    var angleToE = Math.atan2(edy, edx);
+    var relAngle = angleToE - angle;
+    while (relAngle > Math.PI) relAngle -= TAU;
+    while (relAngle < -Math.PI) relAngle += TAU;
+    if (Math.abs(relAngle) > HALF_FOV + 0.25) continue;
+    var screenX = W/2 + (relAngle / HALF_FOV) * (W/2);
+    var zIdx = Math.max(0, Math.min(NUM_RAYS-1, ((screenX/W)*NUM_RAYS) | 0));
+    if (eDist > zBuf[zIdx] + 0.3) continue;
+    var sprH = (H * 1.8 / eDist) | 0;
+    var sprW = sprH | 0;
+    var sprY = (H/2) - (sprH/2);
+    var fog = Math.min(0.99, 4.0 / (eDist + 0.3));
+    drawPickup(pk, screenX - sprW/2, sprY, sprW, sprH, fog);
+  }
+
+  // Enemy sprites (sorted back to front)
+  var sortedEnemies = enemies.slice().sort(function(a, b) {
+    return (b.x-px)*(b.x-px)+(b.y-py)*(b.y-py) - ((a.x-px)*(a.x-px)+(a.y-py)*(a.y-py));
+  });
+  for (var ei = 0; ei < sortedEnemies.length; ei++) {
+    var e = sortedEnemies[ei];
     var edx = e.x - px, edy = e.y - py;
     var eDist = Math.sqrt(edx*edx + edy*edy);
     if (eDist < 0.3) continue;
     var angleToE = Math.atan2(edy, edx);
     var relAngle = angleToE - angle;
-    while (relAngle > Math.PI) relAngle -= Math.PI * 2;
-    while (relAngle < -Math.PI) relAngle += Math.PI * 2;
-    if (Math.abs(relAngle) > HALF_FOV + 0.2) continue;
+    while (relAngle > Math.PI) relAngle -= TAU;
+    while (relAngle < -Math.PI) relAngle += TAU;
+    if (Math.abs(relAngle) > HALF_FOV + 0.25) continue;
     var screenX = W/2 + (relAngle / HALF_FOV) * (W/2);
-    var spriteH = (H * 2.2 / eDist) | 0;
-    var spriteW = spriteH * 0.8 | 0;
-    var spriteY = (H/2) - (spriteH/2);
     var zIdx = Math.max(0, Math.min(NUM_RAYS-1, ((screenX/W)*NUM_RAYS) | 0));
     var wallDist = zBuf[zIdx];
     if (eDist > wallDist + 0.3) continue;
-    var fog = Math.min(0.99, 4.0 / (eDist + 0.3));
-    var sprite = e.dead ? SPR_DEAD_DEC :
-      (e.hitFlash > 0 ? decodeSprite(SPR_IMP.map(function(r) { return r.replace(/[1-4]/g,'4'); })) : SPR_IMP_DEC);
-    drawSprite(sprite, screenX - spriteW/2, spriteY, spriteW, spriteH, fog);
+    var sprH = (H * (e.type === 'LOST_SOUL' ? 1.2 : 2.4) / eDist) | 0;
+    var sprW = sprH * 0.85 | 0;
+    var sprY = (H/2) - (sprH/2);
+    var fog = Math.min(0.99, 4.5 / (eDist + 0.3));
+    drawEnemySprite(e, screenX - sprW/2, sprY, sprW, sprH, fog);
+
+    // Enemy health bar
+    if (!e.dead && e.health < E[e.type].maxHealth) {
+      var barW = sprW * 0.8;
+      var barX = screenX - barW/2;
+      var barY = sprY - 6;
+      ctx.fillStyle = '#1a0000';
+      ctx.fillRect(barX, barY, barW, 3);
+      var pct = e.health / E[e.type].maxHealth;
+      ctx.fillStyle = pct > 0.5 ? '#44ff44' : pct > 0.25 ? '#ffaa00' : '#ff2222';
+      ctx.fillRect(barX, barY, (barW * pct) | 0, 3);
+    }
   }
 
-  // ================================================================
-  // IN-CANVAS HUD — designed for 390x450 Bip 6 display
-  // Top and bottom safe zones (accounting for rounded corners)
-  // ================================================================
-  var PAD = 8;
+  ctx.restore(); // end screen shake
 
-  // --- TOP BAR ---
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(0, 0, W, 24);
-
-  ctx.font = '9px monospace';
-  ctx.textBaseline = 'top';
-
-  // FPS (left)
-  ctx.fillStyle = '#444';
-  ctx.fillText('FPS:' + FPS, PAD, 7);
-
-  // Compass (center)
-  var dirs = ['N','NE','E','SE','S','SW','W','NW'];
-  var dirIdx = (((player.angle + Math.PI/8) / (Math.PI/4)) | 0) % 8;
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#666';
-  ctx.fillText(dirs[dirIdx], W/2, 7);
-  ctx.textAlign = 'left';
-
-  // Sensor indicator (right) — shows GYRO ON when active, CALIBRATING... when collecting data
-  if (ZeppOS.gyroEnabled) {
-    ctx.textAlign = 'right';
-    ctx.fillStyle = ZeppOS.calibrated ? '#2a7a2a' : '#7a7a2a';
-    ctx.fillText(ZeppOS.calibrated ? 'GYRO ON' : 'CALIBRATING', W - PAD, 7);
-    ctx.textAlign = 'left';
-  } else {
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#333';
-    ctx.fillText('KB MODE', W - PAD, 7);
-    ctx.textAlign = 'left';
-  }
-
-  // --- BOTTOM HUD STRIP ---
-  var hudY = H - 46;
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0, hudY - 4, W, H - hudY + 4);
-  ctx.strokeStyle = '#2a2a2a';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, hudY - 4); ctx.lineTo(W, hudY - 4);
-  ctx.stroke();
-
-  // ---- 3-SEGMENT BOTTOM HUD ----
-  var segW = W / 3;
-
-  // SEGMENT 1: HP + Armor (left)
-  ctx.textBaseline = 'top';
-  ctx.font = 'bold 9px monospace';
-  var hp = Math.max(0, player.health);
-  var hpCol = hp > 50 ? '#44ee44' : hp > 25 ? '#ffaa00' : '#ff2222';
-  ctx.fillStyle = '#555'; ctx.fillText('HP', PAD, hudY + 3);
-  ctx.fillStyle = hpCol;
-  ctx.font = 'bold 13px monospace';
-  ctx.fillText(hp, PAD + 18, hudY);
-
-  // Armor
-  ctx.font = 'bold 9px monospace';
-  ctx.fillStyle = '#446688'; ctx.fillText('AR', PAD, hudY + 17);
-  ctx.fillStyle = player.armor > 0 ? '#4488ff' : '#2a2a2a';
-  ctx.font = 'bold 11px monospace';
-  ctx.fillText(player.armor, PAD + 18, hudY + 14);
-
-  // SEGMENT 2: Ammo (center)
-  var wp = WEAPONS[currentWeapon];
-  var ammo = AMMO[wp.ammoType];
-  var maxA = wp.ammoMax || MAX_AMMO[wp.ammoType];
-  var ammoPct = ammo / maxA;
-  var ammoCol = ammoPct > 0.4 ? '#ffdd44' : ammoPct > 0.2 ? '#ffaa00' : '#ff2222';
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 9px monospace';
-  ctx.fillStyle = '#666'; ctx.fillText('AMMO', W/2, hudY + 3);
-  ctx.fillStyle = ammoCol;
-  ctx.font = 'bold 14px monospace';
-  ctx.fillText(ammo, W/2, hudY);
-  // Ammo bar
-  var barW = 50, barH = 5;
-  var barX = W/2 - barW/2;
-  ctx.fillStyle = '#1a1a1a';
-  ctx.fillRect(barX, hudY + 19, barW, barH);
-  ctx.fillStyle = ammoCol;
-  ctx.fillRect(barX, hudY + 19, (barW * ammoPct) | 0, barH);
-
-  // SEGMENT 3: Weapon + Kills (right)
-  ctx.textAlign = 'right';
-  var wepNames  = ['PST', 'SHT', 'CHG'];
-  var wepColors = ['#dddddd', '#ffaa44', '#ff6644'];
-  ctx.font = 'bold 9px monospace';
-  ctx.fillStyle = wepColors[currentWeapon];
-  ctx.fillText(wepNames[currentWeapon], W - PAD, hudY + 3);
-  ctx.font = 'bold 13px monospace';
-  ctx.fillStyle = '#333';
-  ctx.fillText('K:' + player.kills, W - PAD, hudY);
+  // ---- HUD (no shake) ----
+  drawHUD();
 
   // Damage flash overlay
   if (damageFlash > 0) {
@@ -889,7 +1398,7 @@ function render() {
     ctx.fillRect(0, 0, W, H);
   }
 
-  // --- CROSSHAIR ---
+  // Crosshair
   var crossColor = hitMarker > 0 ? '#ff4444' : 'rgba(200,200,200,0.7)';
   ctx.strokeStyle = crossColor;
   ctx.lineWidth = hitMarker > 0 ? 2 : 1;
@@ -902,153 +1411,282 @@ function render() {
   ctx.arc(W/2, H/2, hitMarker > 0 ? 2.5 : 1.5, 0, Math.PI * 2);
   ctx.fill();
 
-  // --- FIRST-PERSON WEAPON ---
-  // Gun fills bottom-center of view, barrel pointing up toward horizon
+  // First-person weapon
+  drawWeapon();
+
+  // Level complete overlay
+  if (levelComplete) {
+    drawLevelComplete();
+  }
+
+  // Game over overlay
+  if (gameOver) {
+    drawGameOver();
+  }
+}
+
+function drawHUD() {
+  var PAD = 8;
+
+  // TOP BAR
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, W, 26);
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, 26); ctx.lineTo(W, 26); ctx.stroke();
+
+  ctx.font = 'bold 9px monospace';
+  ctx.textBaseline = 'top';
+
+  // FPS
+  ctx.fillStyle = '#444';
+  ctx.fillText('FPS:' + FPS, PAD, 8);
+
+  // Level name
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#5a5a6a';
+  ctx.fillText(LEVELS[currentLevel].name, W/2, 8);
+  ctx.textAlign = 'left';
+
+  // Sensor status
+  ctx.textAlign = 'right';
+  ctx.fillStyle = ZeppOS.calibrated ? '#2a7a2a' : '#7a7a2a';
+  ctx.fillText(ZeppOS.calibrated ? 'GYRO' : 'CAL', W - PAD, 8);
+  ctx.textAlign = 'left';
+
+  // ---- BOTTOM HUD ----
+  var hudH = 50;
+  var hudY = H - hudH;
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, hudY, W, hudH);
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.beginPath(); ctx.moveTo(0, hudY); ctx.lineTo(W, hudY); ctx.stroke();
+
+  var segW = W / 3;
+
+  // SEG 1: HP + Armor
+  ctx.font = 'bold 8px monospace';
+  ctx.textBaseline = 'top';
+  var hp = Math.max(0, player.health);
+  var hpCol = hp > 50 ? '#44ee44' : hp > 25 ? '#ffaa00' : '#ff2222';
+  ctx.fillStyle = '#555'; ctx.fillText('HP', PAD, hudY + 4);
+  ctx.fillStyle = hpCol;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(hp, PAD + 14, hudY + 1);
+  ctx.font = 'bold 8px monospace';
+  ctx.fillStyle = '#446688'; ctx.fillText('AR', PAD, hudY + 19);
+  ctx.fillStyle = player.armor > 0 ? '#4488ff' : '#2a2a2a';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText(player.armor, PAD + 14, hudY + 16);
+
+  // HP bar
+  var barW = 48, barH = 4;
+  ctx.fillStyle = '#1a0a0a';
+  ctx.fillRect(PAD + 30, hudY + 4, barW, barH);
+  ctx.fillStyle = hpCol;
+  ctx.fillRect(PAD + 30, hudY + 4, (barW * hp / 100) | 0, barH);
+
+  // SEG 2: Ammo
+  ctx.textAlign = 'center';
+  var wp = WEAPONS[currentWeapon];
+  var ammo = AMMO[wp.ammoType];
+  var maxA = wp.ammoMax;
+  var ammoPct = ammo / maxA;
+  var ammoCol = ammoPct > 0.4 ? '#ffdd44' : ammoPct > 0.2 ? '#ffaa00' : '#ff2222';
+  ctx.font = 'bold 8px monospace';
+  ctx.fillStyle = '#666';
+  ctx.fillText('AMMO', W/2, hudY + 4);
+  ctx.fillStyle = ammoCol;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(ammo, W/2, hudY + 16);
+  ctx.font = 'bold 8px monospace';
+  ctx.fillStyle = '#444';
+  ctx.fillText(ammoPct > 0 ? '' : 'EMPTY', W/2, hudY + 32);
+
+  // SEG 3: Weapon + Kills
+  ctx.textAlign = 'right';
+  var wepNames  = ['PST', 'SHT', 'CHG'];
+  var wepColors = ['#dddddd', '#ffaa44', '#ff6644'];
+  ctx.font = 'bold 8px monospace';
+  ctx.fillStyle = wepColors[currentWeapon];
+  ctx.fillText(wepNames[currentWeapon], W - PAD, hudY + 4);
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#333';
+  ctx.fillText('K:' + player.kills, W - PAD, hudY + 16);
+  ctx.textAlign = 'left';
+
+  // Message
+  if (messageTimer > 0) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 10px monospace';
+    var alpha = Math.min(1, messageTimer / 30);
+    ctx.fillStyle = 'rgba(255,220,100,' + alpha + ')';
+    ctx.fillText(messageText, W/2, H/2 - 40);
+    ctx.textAlign = 'left';
+  }
+}
+
+function drawWeapon() {
   var wx = W / 2;
-  var wy = H - 8 + weaponBobY;
+  var wy = H - 6 + weaponBobY;
+  var gx = wx - 40, gy = wy - 80;
+  var gunW = 80, gunH = 82;
   var isShotgun  = currentWeapon === 1;
   var isChaingun = currentWeapon === 2;
-  // Gun dimensions grow UPWARD from wy
-  var gunW = isShotgun ? 96 : isChaingun ? 76 : 66;
-  var gunH = isShotgun ? 95 : isChaingun ? 90 : 82;
-  var gx = wx - gunW / 2;
-  var gy = wy - gunH;  // top of gun
 
-  // ---- PISTOL ----
   if (!isShotgun && !isChaingun) {
-    // Slide / barrel (top section, pointing toward horizon)
-    ctx.fillStyle = '#404040';
-    ctx.fillRect(gx + 16, gy + 4, 38, 12);
-    // Slide serrations
-    ctx.fillStyle = '#2a2a2a';
+    // PISTOL
+    ctx.fillStyle = '#3a3a3a';
+    ctx.fillRect(gx + 12, gy + 2, 36, 12);
+    ctx.fillStyle = '#252525';
     for (var si = 0; si < 5; si++) {
-      ctx.fillRect(gx + 20 + si * 7, gy + 6, 3, 8);
+      ctx.fillRect(gx + 16 + si * 7, gy + 4, 3, 8);
     }
-    // Frame
-    ctx.fillStyle = '#505050';
-    ctx.fillRect(gx + 14, gy + 14, 24, 20);
-    // Barrel hole
+    ctx.fillStyle = '#484848';
+    ctx.fillRect(gx + 10, gy + 12, 22, 18);
     ctx.fillStyle = '#111';
-    ctx.fillRect(gx + 52, gy + 8, 8, 6);
-    // Grip
-    ctx.fillStyle = '#261508';
-    ctx.fillRect(gx + 14, gy + 30, 18, 36);
-    // Grip texture
-    ctx.fillStyle = '#1a0f05';
-    ctx.fillRect(gx + 16, gy + 32, 2, 32);
-    ctx.fillRect(gx + 20, gy + 32, 2, 32);
-    ctx.fillRect(gx + 24, gy + 32, 2, 32);
-    // Trigger guard
-    ctx.fillStyle = '#333';
-    ctx.fillRect(gx + 18, gy + 24, 14, 10);
-    // Trigger
-    ctx.fillStyle = '#555';
-    ctx.fillRect(gx + 23, gy + 26, 3, 6);
-    // Rear sight
+    ctx.fillRect(gx + 44, gy + 6, 8, 6);
+    ctx.fillStyle = '#201508';
+    ctx.fillRect(gx + 10, gy + 26, 16, 34);
+    ctx.fillStyle = '#160e04';
+    ctx.fillRect(gx + 12, gy + 28, 2, 30);
+    ctx.fillRect(gx + 16, gy + 28, 2, 30);
+    ctx.fillRect(gx + 20, gy + 28, 2, 30);
     ctx.fillStyle = '#2a2a2a';
-    ctx.fillRect(gx + 14, gy + 2, 6, 4);
-  }
-
-  // ---- SHOTGUN ----
-  else if (isShotgun) {
-    // Barrel (long, top)
-    ctx.fillStyle = '#383838';
-    ctx.fillRect(gx + 22, gy + 4, 66, 14);
-    // Barrel ribs
-    ctx.fillStyle = '#2a2a2a';
-    ctx.fillRect(gx + 24, gy + 6, 62, 3);
-    ctx.fillRect(gx + 24, gy + 12, 62, 3);
-    // Receiver
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(gx + 14, gy + 14, 32, 26);
-    // Ejection port
+    ctx.fillRect(gx + 14, gy + 20, 12, 10);
+    ctx.fillStyle = '#444';
+    ctx.fillRect(gx + 19, gy + 22, 3, 6);
     ctx.fillStyle = '#222';
-    ctx.fillRect(gx + 18, gy + 18, 12, 6);
-    // Barrel bands
-    ctx.fillStyle = '#666';
-    ctx.fillRect(gx + 22, gy + 4, 4, 14);
-    ctx.fillRect(gx + 60, gy + 4, 4, 14);
-    // Stock (grip on left, extends DOWN from receiver)
-    ctx.fillStyle = '#2a1505';
-    ctx.fillRect(gx, gy + 18, 18, 44);
-    // Stock checkering
-    ctx.fillStyle = '#1a0d03';
-    for (var sj = 0; sj < 6; sj++) {
-      ctx.fillRect(gx + 2, gy + 22 + sj * 6, 14, 2);
-    }
-    // Pump grip
-    ctx.fillStyle = '#1f1205';
-    ctx.fillRect(gx + 40, gy + 36, 22, 14);
-    // Barrel end
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(gx + 84, gy + 5, 10, 12);
-  }
-
-  // ---- CHAINGUN ----
-  else if (isChaingun) {
-    // Twin barrels (top)
+    ctx.fillRect(gx + 10, gy, 6, 4);
+  } else if (isShotgun) {
+    // SHOTGUN
     ctx.fillStyle = '#333';
-    ctx.fillRect(gx + 8, gy + 2, 56, 9);
-    ctx.fillRect(gx + 8, gy + 14, 56, 9);
-    // Barrel housing
+    ctx.fillRect(gx + 18, gy + 2, 60, 14);
+    ctx.fillStyle = '#252525';
+    ctx.fillRect(gx + 20, gy + 4, 56, 4);
+    ctx.fillRect(gx + 20, gy + 10, 56, 3);
     ctx.fillStyle = '#4a4a4a';
-    ctx.fillRect(gx + 4, gy + 4, 10, 22);
-    // Motor housing
-    ctx.fillStyle = '#555';
-    ctx.fillRect(gx + 62, gy, 16, 28);
-    // Motor ridges
-    ctx.fillStyle = '#333';
-    for (var mi = 0; mi < 4; mi++) {
-      ctx.fillRect(gx + 64 + mi * 3, gy + 2, 2, 24);
-    }
-    // Ammo box (below barrels)
-    ctx.fillStyle = '#2a2010';
-    ctx.fillRect(gx + 16, gy + 30, 36, 20);
-    // Ammo visible in box
-    ctx.fillStyle = '#554422';
-    for (var ai = 0; ai < 5; ai++) {
-      ctx.fillRect(gx + 18 + ai * 7, gy + 32, 5, 16);
-    }
-    // Barrel end
+    ctx.fillRect(gx + 10, gy + 12, 28, 24);
     ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(gx + 62, gy + 5, 8, 16);
-    // Cooling holes
-    ctx.fillStyle = '#222';
-    ctx.fillRect(gx + 20, gy + 4, 4, 8);
-    ctx.fillRect(gx + 28, gy + 4, 4, 8);
-    ctx.fillRect(gx + 36, gy + 4, 4, 8);
-    ctx.fillRect(gx + 44, gy + 4, 4, 8);
+    ctx.fillRect(gx + 14, gy + 16, 10, 5);
+    ctx.fillStyle = '#606060';
+    ctx.fillRect(gx + 18, gy + 2, 4, 14);
+    ctx.fillRect(gx + 54, gy + 2, 4, 14);
+    ctx.fillStyle = '#201005';
+    ctx.fillRect(gx, gy + 16, 16, 42);
+    ctx.fillStyle = '#150c04';
+    for (var sj = 0; sj < 5; sj++) {
+      ctx.fillRect(gx + 2, gy + 20 + sj * 7, 12, 2);
+    }
+    ctx.fillStyle = '#160e04';
+    ctx.fillRect(gx + 36, gy + 32, 20, 14);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(gx + 74, gy + 3, 10, 12);
+  } else {
+    // CHAINGUN
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(gx + 6, gy, 50, 9);
+    ctx.fillRect(gx + 6, gy + 12, 50, 9);
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(gx + 2, gy + 2, 8, 22);
+    ctx.fillStyle = '#4a4a4a';
+    ctx.fillRect(gx + 56, gy - 2, 14, 26);
+    ctx.fillStyle = '#2a2a2a';
+    for (var mi = 0; mi < 3; mi++) {
+      ctx.fillRect(gx + 58 + mi * 3, gy, 2, 22);
+    }
+    ctx.fillStyle = '#201808';
+    ctx.fillRect(gx + 14, gy + 28, 32, 18);
+    ctx.fillStyle = '#4a3a1a';
+    for (var ai = 0; ai < 4; ai++) {
+      ctx.fillRect(gx + 16 + ai * 7, gy + 30, 5, 14);
+    }
+    ctx.fillStyle = '#111';
+    ctx.fillRect(gx + 56, gy + 4, 7, 14);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(gx + 18, gy + 2, 3, 7);
+    ctx.fillRect(gx + 25, gy + 2, 3, 7);
+    ctx.fillRect(gx + 32, gy + 2, 3, 7);
+    ctx.fillRect(gx + 39, gy + 2, 3, 7);
   }
 
   // Muzzle flash
   if (muzzleFlash > 0) {
-    var flashX = wx;
-    var flashY = gy + 10;
-    var flashR = muzzleFlash * 3;
-    ctx.fillStyle = 'rgba(255, 190, 40, 0.9)';
+    var flashX = wx + 10;
+    var flashY = gy + 8;
+    var flashR = muzzleFlash * 3.5;
+    ctx.fillStyle = 'rgba(255,190,40,0.9)';
     ctx.beginPath();
     ctx.arc(flashX, flashY, flashR + 10, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = 'rgba(255, 255, 200, 1.0)';
+    ctx.fillStyle = 'rgba(255,255,200,1.0)';
     ctx.beginPath();
     ctx.arc(flashX, flashY, flashR * 0.4, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
-// ---- Main loop ----
+function drawLevelComplete() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  var cx = W/2, cy = H/2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = '#ffdd44';
+  ctx.fillText('LEVEL COMPLETE!', cx, cy - 60);
+
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillText('KILLS: ' + player.kills, cx, cy - 30);
+  ctx.fillText('HP: ' + player.health + '  AR: ' + player.armor, cx, cy - 10);
+
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = '#44dd44';
+  ctx.fillText('NEXT: LEVEL ' + ((currentLevel + 2)) + ': ' + LEVELS[(currentLevel+1) % LEVELS.length].name, cx, cy + 20);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '9px monospace';
+  ctx.fillText('PRESS N OR SWIPE DOWN FOR NEXT LEVEL', cx, cy + 50);
+  ctx.textAlign = 'left';
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(0, 0, W, H);
+
+  var cx = W/2, cy = H/2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#ff2222';
+  ctx.fillText('GAME OVER', cx, cy - 40);
+
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#888';
+  ctx.fillText('KILLS: ' + player.kills, cx, cy - 5);
+  ctx.fillText('REACHED: LEVEL ' + (currentLevel + 1) + ' - ' + LEVELS[currentLevel].name, cx, cy + 15);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '9px monospace';
+  ctx.fillText('PRESS E TO RESTART', cx, cy + 45);
+  ctx.textAlign = 'left';
+}
+
+// ================================================================
+// MAIN LOOP
+// ================================================================
 var canvas = document.getElementById('c');
-canvas.width  = W;
-canvas.height = H;
+canvas.width = W; canvas.height = H;
 ctx = canvas.getContext('2d');
 
 var lastTs = 0;
 function loop(ts) {
-  if (!running) return;
   if (ts - lastFpsTime >= 1000) {
-    FPS = frameCount;
-    frameCount = 0;
-    lastFpsTime = ts;
+    FPS = frameCount; frameCount = 0; lastFpsTime = ts;
   }
   frameCount++;
   update();
@@ -1056,18 +1694,23 @@ function loop(ts) {
   setTimeout(function() { loop(performance.now()); }, 50);
 }
 
-// ---- Boot ----
+window.addEventListener('keydown', function(e) {
+  if (gameOver && e.code === 'KeyE') {
+    gameOver = false;
+    loadLevel(0);
+  }
+  if (e.code === 'KeyN' && levelComplete) nextLevel();
+});
+
 ZeppOS.init();
 ZeppOS.onGesture(function(gesture) {
-  if (gesture === 'DOUBLE_TAP') {
-    tryShoot();
-  } else if (gesture === 'GESTURE_LEFT') {
-    currentWeapon = (currentWeapon - 1 + WEAPONS.length) % WEAPONS.length;
-  } else if (gesture === 'GESTURE_RIGHT') {
-    currentWeapon = (currentWeapon + 1) % WEAPONS.length;
-  }
+  if (levelComplete && gesture === 'GESTURE_LEFT') { nextLevel(); return; }
+  if (gesture === 'DOUBLE_TAP') tryShoot();
+  else if (gesture === 'GESTURE_LEFT') switchWeapon((currentWeapon - 1 + WEAPONS.length) % WEAPONS.length);
+  else if (gesture === 'GESTURE_RIGHT') switchWeapon((currentWeapon + 1) % WEAPONS.length);
 });
 ZeppOS.vibrate('VIBRATOR_SCENE_SHORT_MIDDLE');
+loadLevel(0);
 lastFpsTime = performance.now();
 loop(performance.now());
 </script>
